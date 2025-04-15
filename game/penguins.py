@@ -1,8 +1,8 @@
 # Robot class
 import pygame
-from config import TILE_SIZE, ROBOT_COLORS
+from config import TILE_SIZE, PENGUIN_COLORS
 
-class Robot:
+class Penguin:
     def __init__(self, color, x, y):
         self.color = color
         self.x = x
@@ -10,9 +10,9 @@ class Robot:
 
     def draw(self, surface):
         center = (self.x * TILE_SIZE + TILE_SIZE // 2, self.y * TILE_SIZE + TILE_SIZE // 2)
-        pygame.draw.circle(surface, ROBOT_COLORS[self.color], center, TILE_SIZE // 3)
+        pygame.draw.circle(surface, PENGUIN_COLORS[self.color], center, TILE_SIZE // 3)
 
-    def move_until_blocked(self, direction, board, other_robots):
+    def move_until_blocked(self, direction, board, other_penguins):
         dx, dy = 0, 0
         if direction == 'up': dy = -1
         elif direction == 'down': dy = 1
@@ -28,7 +28,7 @@ class Robot:
                 break
 
             # Check robot collision
-            if any(r.x == new_x and r.y == new_y for r in other_robots if r != self):
+            if any(r.x == new_x and r.y == new_y for r in other_penguins if r != self):
                 break
 
             # Move

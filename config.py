@@ -9,7 +9,7 @@ FPS = 60
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 GREY = (200, 200, 200)
-ROBOT_COLORS = {
+PENGUIN_COLORS = {
     "red": (255, 0, 0),
     "blue": (0, 0, 255),
     "green": (0, 255, 0),

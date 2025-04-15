@@ -8,21 +8,21 @@
 import pygame
 from config import SCREEN_WIDTH, SCREEN_HEIGHT, TILE_SIZE, FPS, WHITE
 from game.board import Board
-from game.penguins import Robot
+from game.penguins import Penguin
 
 def main():
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Ricochet Robots")
+    pygame.display.set_caption("Arctic Rush")
     clock = pygame.time.Clock()
 
     # Init board and robots
     board = Board()
-    robots = [
-        Robot("red", 1, 1),
-        Robot("blue", 14, 1),
-        Robot("green", 1, 14),
-        Robot("yellow", 14, 14)
+    penguins = [
+        Penguin("red", 1, 1),
+        Penguin("blue", 14, 1),
+        Penguin("green", 1, 14),
+        Penguin("yellow", 14, 14)
     ]
     selected_index = 0
 
@@ -45,20 +45,20 @@ def main():
 
                 # Move selected robot
                 if event.key in keys:
-                    robots[selected_index].move_until_blocked(keys[event.key], board, robots)
+                    penguins[selected_index].move_until_blocked(keys[event.key], board, penguins)
 
                 # Change selected robot
                 elif event.key == pygame.K_TAB:
-                    selected_index = (selected_index + 1) % len(robots)
+                    selected_index = (selected_index + 1) % len(penguins)
 
         # Draw everything
         board.draw(screen)
-        for i, robot in enumerate(robots):
+        for i, penguin in enumerate(penguins):
             if i == selected_index:
                 # Draw selection ring
-                rect = pygame.Rect(robot.x * TILE_SIZE, robot.y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+                rect = pygame.Rect(penguin.x * TILE_SIZE, penguin.y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
                 pygame.draw.rect(screen, (0, 0, 0), rect, 3)
-            robot.draw(screen)
+            penguin.draw(screen)
 
         pygame.display.flip()
 
