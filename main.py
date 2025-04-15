@@ -55,7 +55,7 @@ def main():
                     if penguins[selected_index].move_until_blocked(keys[event.key], board, penguins):
                         move_counter += 1
                         if target_manager.check_target_reached(penguins, target_deck.target_position, target_deck.target_color):
-                            print("You Won in " + move_counter + " moves!")
+                            print("You Won in " + str(move_counter) + " moves!")
                             target_deck.set_new_target()
                             move_counter = 0
 
@@ -69,9 +69,18 @@ def main():
             target.draw(screen, font)
         for i, penguin in enumerate(penguins):
             if i == selected_index:
-                # Draw selection ring
-                rect = pygame.Rect(penguin.x * TILE_SIZE, penguin.y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
-                pygame.draw.rect(screen, PINK, rect, 3)
+                # Full cell position in pixels
+                px = penguin.x * TILE_SIZE
+                py = penguin.y * TILE_SIZE
+
+                # Target rectangle size (smaller than full cell)
+                padding = 2
+                targeted_penguin_size = TILE_SIZE - 2 * padding
+                targeted_penguin_rect = pygame.Rect(px + padding, py + padding, targeted_penguin_size, targeted_penguin_size)
+
+                # Draw the inner rectangle for the target
+                pygame.draw.rect(screen, PINK, targeted_penguin_rect, 3)
+
             penguin.draw(screen)
 
         # Define a "div" as a pygame.Rect

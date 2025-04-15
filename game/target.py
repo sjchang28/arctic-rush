@@ -5,7 +5,7 @@ import json, os
 import pygame
 import random
 
-from config import TILE_SIZE, PENGUIN_COLORS, BLACK
+from config import TILE_SIZE, PENGUIN_COLORS, BLACK, GREY
 
 # Get absolute path to the level.json file
 current_dir = os.path.dirname(__file__)
@@ -37,7 +37,7 @@ class Target:
         pygame.draw.rect(screen, BLACK, target_rect, 2)  # Border
 
         # Draw the target letter in the center
-        text_surf = font.render(self.target_type, True, BLACK)
+        text_surf = font.render(self.target_type, True, GREY)
         text_rect = text_surf.get_rect(center=target_rect.center)
         screen.blit(text_surf, text_rect)
 
