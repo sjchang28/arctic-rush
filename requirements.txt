@@ -1,0 +1,25 @@
+# pip
+pip>=25.0.1
+
+# Core dependencies
+pygame>=2.6.1
+numpy>=2.2.4
+tqdm>=4.67.1
+
+# PyTorch with CUDA 12.1 (adjust version if needed)
+torch>=2.6.0
+torchvision>=0.21.0
+torchaudio>=2.6.0
+gym>=0.26.2
+matplotlib>=3.10.1
+tensorboard>=2.19.0
+stable-baselines3>=2.6.0
+gymnasium>=1.1.1
+pandas>=2.2.3
+opencv-python>=4.11.0.86
+pygame>=2.6.1
+psutil>=7.0.0
+tqdm>=4.67.1
+rich>=14.0.0
+ale-py>=0.10.2
+farama-notifications>=0.0.4

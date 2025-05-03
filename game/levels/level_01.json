@@ -502,14 +502,6 @@
     }
   ],
   "deck": [
-    { "position": [1, 2], "color": "green", "type": "A" },
-    { "position": [9, 1], "color": "green", "type": "B" },
-    { "position": [3, 14], "color": "green", "type": "C" },
-    { "position": [9, 13], "color": "green", "type": "D" },
-    { "position": [6, 1], "color": "yellow", "type": "A" },
-    { "position": [14, 2], "color": "yellow", "type": "B" },
-    { "position": [4, 9], "color": "yellow", "type": "C" },
-    { "position": [8, 10], "color": "yellow", "type": "D" },
     { "position": [3, 6], "color": "red", "type": "A" },
     { "position": [10, 4], "color": "red", "type": "B" },
     { "position": [1, 13], "color": "red", "type": "C" },
@@ -518,6 +510,14 @@
     { "position": [12, 6], "color": "blue", "type": "B" },
     { "position": [6, 10], "color": "blue", "type": "C" },
     { "position": [13, 11], "color": "blue", "type": "D" },
+    { "position": [1, 2], "color": "green", "type": "A" },
+    { "position": [9, 1], "color": "green", "type": "B" },
+    { "position": [3, 14], "color": "green", "type": "C" },
+    { "position": [9, 13], "color": "green", "type": "D" },
+    { "position": [6, 1], "color": "yellow", "type": "A" },
+    { "position": [14, 2], "color": "yellow", "type": "B" },
+    { "position": [4, 9], "color": "yellow", "type": "C" },
+    { "position": [8, 10], "color": "yellow", "type": "D" },
     { "position": [7, 12], "color": "any", "type": "any" }
   ]
 }

@@ -1,1 +1,0 @@
-# Brute-Force with Alpha-Beta Pruning (limited Depth-First Search)
