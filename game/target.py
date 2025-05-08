@@ -5,11 +5,11 @@ import json, os, numpy as np
 import pygame
 import random
 
-from config import TILE_SIZE, COLOR_MAP, PENGUIN_COLORS, BLACK, GREY
+from config import LEVEL_FILE, TILE_SIZE, COLOR_MAP, ROBOT_COLORS, BLACK, GREY
 
 # Get absolute path to the level.json file
 current_dir = os.path.dirname(__file__)
-level_file = os.path.join(current_dir, "levels", "level_01.json")
+level_file = os.path.join(current_dir, "levels", LEVEL_FILE)
 
 class Target:
     
@@ -38,7 +38,7 @@ class Target:
         target_rect = pygame.Rect(px + padding, py + padding, target_size, target_size)
 
         # Draw the inner rectangle for the target
-        pygame.draw.rect(screen, PENGUIN_COLORS.get(self.color, GREY), target_rect)
+        pygame.draw.rect(screen, ROBOT_COLORS.get(self.color, GREY), target_rect)
         pygame.draw.rect(screen, BLACK, target_rect, 2)  # Border
 
         # Draw the target letter in the center
@@ -66,9 +66,9 @@ class TargetDeck:
         with open(deck_file, "r") as f:
             data = json.load(f)
 
-        for target in data.get("deck", []):
+        for target in data.get("targets", []):
             self.deck.append(Target(
-                target["position"][0], target["position"][1], target["color"], target["type"]
+                target["col"], target["row"], target["color"], target["type"]
             ))
 
 

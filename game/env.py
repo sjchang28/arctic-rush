@@ -2,59 +2,58 @@ import gymnasium
 from gymnasium import spaces
 import numpy as np
 
-from game.penguins import Penguin
-from game.game import Game
+from game.robots import Robot
+from game.game import AI_Game
 
-from config import BOARD_WIDTH, BOARD_HEIGHT, INT2DIRECTION, NUMBER_OF_PENGUINS, NUMBER_OF_POSSIBLE_MOVES
+from config import BOARD_WIDTH, BOARD_HEIGHT, INT2DIRECTION, NUMBER_OF_ROBOTS, NUMBER_OF_POSSIBLE_MOVES
 
-class RicochetPenguinsEnv(gymnasium.Env):
+class RicochetRobotsEnv(gymnasium.Env):
     
     """
-    Custom Environment for Ricochet penguins compatible with OpenAI Gym.
-    AI controls all 4 penguins at once, moving each penguin in turn.
+    Custom Environment for Ricochet robots compatible with OpenAI Gym.
+    AI controls all 4 robots at once, moving each robot in turn.
     """
 
-    def __init__(self, render_mode=None):
+    def __init__(self, render_ai : bool=False):
         
         super().__init__()
 
         # Init board
-        self.penguins = [
-            Penguin("red"),
-            Penguin("blue"),
-            Penguin("green"),
-            Penguin("yellow")
+        self.robots = [
+            Robot("red"),
+            Robot("blue"),
+            Robot("green"),
+            Robot("yellow")
         ]
-        self.render_mode = render_mode
-        self.game = Game(self.penguins)
+        
+        self.render_ai = render_ai
+        self.game = AI_Game(self.robots, render_pygame=self.render_ai)
 
         self.visited_states = set()
         
-        self.selected_penguin_idx = 0
+        self.selected_robot_idx = 0
         self.move_counter = 0
 
-        # Action space: 4 penguins, each with 5 actions (Up, Down, Left, Right, Switch)
-        # Action: [penguin_index, direction (0=Up, 1=Down, 2=Left, 3=Right, 4=Switch)]
-        self.action_space = spaces.MultiDiscrete([NUMBER_OF_PENGUINS, 5])
+        # Action space: 4 robots, each with 5 actions (Up, Down, Left, Right, Switch)
+        # Action: [robot_index, direction (0=Up, 1=Down, 2=Left, 3=Right, 4=Switch)]
+        self.action_space = spaces.MultiDiscrete([NUMBER_OF_ROBOTS, 5])
 
-        # Observation space: flattened board state + current_target (x,y,color) + positions of 4 penguins + penguin_idx + move_counter
+        # Observation space: flattened board state + current_target (x,y,color) + positions of 4 robots + robot_idx + move_counter
         self.observation_space = spaces.Box(
-            low=0, high=255, shape=((BOARD_WIDTH * BOARD_HEIGHT * 4) + (3) + (NUMBER_OF_PENGUINS * 3) + (1) + (1),), dtype=np.float32
+            low=0, high=255, shape=((BOARD_WIDTH * BOARD_HEIGHT * 4) + (3) + (NUMBER_OF_ROBOTS * 3) + (1) + (1),), dtype=np.float32
         )
 
         self.reset()
-        
-        self.active_gameplay = False
         
         
     def reset(self):
         
         # Initialize the game state
-        self.game.penguin_manager._initialize_penguin_positions()
+        self.game.robot_manager._initialize_robot_positions()
         self.game.target_deck.set_new_target()
         self.visited_states.clear()
         
-        self.selected_penguin_idx = 0
+        self.selected_robot_idx = 0
         self.move_counter = 0 
 
         return self._get_obs()
@@ -64,41 +63,41 @@ class RicochetPenguinsEnv(gymnasium.Env):
         
         flat_walls = self.game.board.flatten_walls()
         flat_target = self.game.target_deck.flatten_current_target()
-        flat_penguins = self.game.penguin_manager.flatten_penguins()
-        flat_selected_penguin = np.array([self.selected_penguin_idx])
+        flat_robots = self.game.robot_manager.flatten_robots()
+        flat_selected_robot = np.array([self.selected_robot_idx])
         flat_move_counter = np.array([self.move_counter])
 
-        return np.concatenate([flat_walls, flat_target, flat_penguins, flat_selected_penguin, flat_move_counter], axis=0)
+        return np.concatenate([flat_walls, flat_target, flat_robots, flat_selected_robot, flat_move_counter], axis=0)
 
 
     def step(self, action):
-        penguin_idx, direction = divmod(action, NUMBER_OF_POSSIBLE_MOVES)
+        robot_idx, direction = divmod(action, NUMBER_OF_POSSIBLE_MOVES)
         done = False
         reward = 0
 
-        # Handle tabbing (direction 4 means switch penguin)
+        # Handle tabbing (direction 4 means switch robot)
         if direction == 4:
-            if penguin_idx != self.selected_penguin_idx:
-                self.selected_penguin_idx = penguin_idx
+            if robot_idx != self.selected_robot_idx:
+                self.selected_robot_idx = robot_idx
             reward = 0
             done = False
         else:
-            selected_penguin = self.penguins[self.selected_penguin_idx]
-            state_key = (tuple((p.x, p.y) for p in self.penguins), self.selected_penguin_idx)
+            selected_robot = self.robots[self.selected_robot_idx]
+            state_key = (tuple((p.x, p.y) for p in self.robots), self.selected_robot_idx)
 
             # Move until blocked
-            if selected_penguin.move_until_blocked(
+            if selected_robot.move_until_blocked(
                 simulated=False,
                 direction=INT2DIRECTION[int(direction)],
                 board=self.game.board,
-                other_penguins=self.game.penguin_manager.penguins
+                other_robots=self.game.robot_manager.robots
             ):
                 self.move_counter += 1
 
-                if selected_penguin.is_target_reached(
+                if selected_robot.is_target_reached(
                     self.game.target_deck.current_target
                 ):
-                    reward = max(1000 - self.move_counter * 10, 100)
+                    reward = max(1000 - (self.move_counter * 10), 100)
                     done = True
 
             # Check if state was repeated
@@ -110,14 +109,14 @@ class RicochetPenguinsEnv(gymnasium.Env):
         obs = self._get_obs()
         return obs, reward, done, {}
 
-    def render(self, mode=None):
+
+    def render(self):
         
-        if mode == 'human':
-            self.active_gameplay = True
-            self.game.render_ai_environment(self.selected_penguin_idx, self.move_counter)
+        if self.render_ai:
+            self.game.render_ai_environment(self.selected_robot_idx, self.move_counter)
     
     
     def close(self):
         
-        if self.active_gameplay:
+        if self.render_ai:
             self.game.close()

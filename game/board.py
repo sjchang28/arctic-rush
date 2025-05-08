@@ -2,13 +2,90 @@
 # Stores wall data
 
 import pygame
+import math
 import json, os, numpy as np
-from config import TILE_SIZE, BOARD_WIDTH, BOARD_HEIGHT, GREY, BLACK, UP, DOWN, LEFT, RIGHT
+from config import LEVEL_FILE, TILE_SIZE, BOARD_WIDTH, BOARD_HEIGHT, ROBOT_COLORS, GREY, BLACK, UP, DOWN, LEFT, RIGHT
 
 # Get absolute path to the level.json file
 current_dir = os.path.dirname(__file__)
-level_file = os.path.join(current_dir, "levels", "level_01.json")
+level_file = os.path.join(current_dir, "levels", LEVEL_FILE)
 
+class BouncePadManager:
+    
+    def __init__(self, bounce_pad_file=level_file):
+        self.bounce_pads = dict()
+
+        self._load_bounce_pads(bounce_pad_file=bounce_pad_file)
+        
+        
+    def _load_bounce_pads(self, bounce_pad_file):
+        
+        if not os.path.exists(bounce_pad_file):
+            print(f"❌ Bounce Pad file '{bounce_pad_file}' not found.")
+            return
+
+        with open(bounce_pad_file, "r") as f:
+            data = json.load(f)
+
+        for pad in data.get("bounce_pads", []):
+            self.bounce_pads[(pad["col"], pad["row"])] = {
+                'orientation': pad["orientation"],
+                'color': pad["color"],
+                'redirect': {
+                    UP: pad[UP],
+                    RIGHT: pad[RIGHT],
+                    DOWN: pad[DOWN],
+                    LEFT: pad[LEFT]
+                }
+            }
+    
+        
+    def handle_bounce_pad(self, x, y, incoming_direction, robot_color):
+        # Return a new direction if pad applies, otherwise return None
+        pad = self.bounce_pads.get((x, y))
+        if pad and pad['color'] == robot_color:
+            return pad['redirect'].get(incoming_direction)  # e.g., 'up' → 'left'
+        return None
+
+
+    def draw_bounce_pads(self, screen):
+        if not self.bounce_pads:
+            return
+        
+        for (x, y), pad in self.bounce_pads.items():
+            self.draw_single_bounce_pad(screen, x, y, pad['color'], pad['orientation'])
+
+    def draw_single_bounce_pad(self, screen, x, y, color, orientation):
+        center_x = x * TILE_SIZE + TILE_SIZE // 2
+        center_y = y * TILE_SIZE + TILE_SIZE // 2
+
+        # Define thin rectangle (width × height)
+        width = TILE_SIZE // 8
+        height = TILE_SIZE
+
+        # Determine angle from incoming -> launch direction
+        dir_to_angle = {
+            "bl_tr": -45,
+            "tl_br": 45,
+        }
+
+        angle = dir_to_angle.get(orientation)
+        if angle is None:
+            return  # Skip if direction combo is unsupported
+
+        # Create a surface for the bounce pad
+        pad_surf = pygame.Surface((width, height), pygame.SRCALPHA)
+        pygame.draw.rect(pad_surf, pygame.Color(color), pad_surf.get_rect())
+
+        # Rotate the surface
+        rotated = pygame.transform.rotate(pad_surf, angle)
+
+        # Adjust position to center
+        rect = rotated.get_rect(center=(center_x, center_y))
+        screen.blit(rotated, rect)
+
+    
+    
 class Board:
     
     def __init__(self, wall_file=level_file):
@@ -20,6 +97,8 @@ class Board:
 
         self._add_border_walls()
         self._load_custom_walls(wall_file=wall_file)
+        
+        self.bounce_pad_manager = BouncePadManager()
     
     
     def flatten_walls(self):
@@ -85,26 +164,7 @@ class Board:
         """Returns True if no wall blocks the movement in that direction."""
         
         return not self.walls[row][col][direction]
-    
-    def is_wall(self, x, y, direction):
         
-        if not (0 <= x < BOARD_WIDTH and 0 <= y < BOARD_HEIGHT):
-            return True  # Treat out-of-bounds as walls
-        return self.walls[y][x].get(direction, False)
-    
-    
-    def next_cell(self, x, y, direction):
-        
-        if direction == UP:
-            return x, y - 1
-        elif direction == DOWN:
-            return x, y + 1
-        elif direction == LEFT:
-            return x - 1, y
-        elif direction == RIGHT:
-            return x + 1, y
-        return x, y
-
 
     def draw_board(self, surface):
         

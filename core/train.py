@@ -1,18 +1,14 @@
 import time
-import torch.utils.checkpoint
-from tqdm import trange
 import numpy as np
-import matplotlib.pyplot as plt
 import threading
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 from core.mcts import Node, run_mcts, expand_node
-from core.muzero import RicochetConfig, make_ricochet_config
+from core.muzero import RicochetRobotsConfig, make_ricochet_config
 from core.network import Network, SharedStorage, ReplayBuffer
-from core.state import RicochetGame
+from core.state import RicochetRobotsGame
 
 GPU_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -29,7 +25,7 @@ def softmax_sample(distribution, temperature: float):
     return action_index
 
 
-def select_action(config: RicochetConfig,
+def select_action(config: RicochetRobotsConfig,
                   num_moves: int,
                   node: Node,
                   network: Network):
@@ -45,7 +41,7 @@ def select_action(config: RicochetConfig,
 # At the start of each search, we add dirichlet noise to the prior of the root
 # to encourage the search to explore new actions.
 
-def add_exploration_noise(config: RicochetConfig, node: Node):
+def add_exploration_noise(config: RicochetRobotsConfig, node: Node):
 
     actions = list(node.children.keys())
     noise = np.random.dirichlet([config.root_dirichlet_alpha] * len(actions))
@@ -64,25 +60,25 @@ def add_exploration_noise(config: RicochetConfig, node: Node):
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
 
-def run_selfplay_worker(config: RicochetConfig,
+def run_selfplay_worker(config: RicochetRobotsConfig,
                         storage: SharedStorage,
                         replay_buffer: ReplayBuffer,
-                        pid):
+                        pid,
+                        episode_number,
+                        render_ai=False):
 
     # for episode in range(config.training_episodes):
     network = storage.get_latest_network()
-    game = play_game(render_game=False, config=config, network=network)
+    game = play_game(config=config, network=network, render_game=render_ai)
     replay_buffer.save_game(game)
-    print(f"[Worker {pid}] Finished episode.")
-
-    config.new_episode()
+    print(f"[Worker {pid} @ Episode {episode_number}] Thread Finished.")
 
 
 # Each game is produced by starting at the initial board position, then
 # repeatedly executing a Monte Carlo Tree Search to generate moves until the end
 # of the game is reached.
 
-def play_game(render_game: bool, config: RicochetConfig, network: Network) -> RicochetGame:
+def play_game(config: RicochetRobotsConfig, network: Network, render_game: bool = False) -> RicochetRobotsGame:
 
     game = config.new_game()
 
@@ -105,7 +101,7 @@ def play_game(render_game: bool, config: RicochetConfig, network: Network) -> Ri
         game.store_search_statistics(root)
 
         if render_game:
-            game.environment.render(mode='human') # mode='human' to render
+            game.environment.render()
     
     return game
 
@@ -175,7 +171,8 @@ def update_weights(optimizer, network, batch, weight_decay):
     return loss.item()
 
 
-def train_network(config: RicochetConfig, storage: SharedStorage, replay_buffer: ReplayBuffer, iterations: int) -> float:
+def train_network(config: RicochetRobotsConfig, storage: SharedStorage, replay_buffer: ReplayBuffer, iterations: int) -> float:
+    
     network = storage.get_latest_network()
     learning_rate = config.lr_init * \
         (config.lr_decay_rate ** (iterations / config.lr_decay_steps))
@@ -193,13 +190,14 @@ def train_network(config: RicochetConfig, storage: SharedStorage, replay_buffer:
 ##############################
 ####### Part 3: MuZero #######
 
-def launch_selfplay_jobs(config, storage, replay_buffer):
+def launch_selfplay_jobs(config, storage, replay_buffer, episode_number, render_ai):
 
     threads = []
 
     for i in range(config.num_actors):
+        print(f"[Worker {i+1} @ Episode {episode_number}] Thread Launched ...")
         t = threading.Thread(target=run_selfplay_worker, args=(
-            config, storage, replay_buffer, i+1))
+            config, storage, replay_buffer, i+1, episode_number, render_ai))
         t.start()
         threads.append(t)
 
@@ -216,61 +214,51 @@ def launch_selfplay_jobs(config, storage, replay_buffer):
 # from the training to the self-play, and the finished games from the self-play
 # to the training.
 
-def muzero(config: RicochetConfig):
+def muzero(config: RicochetRobotsConfig, render_ai: bool = False):
 
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
 
-    #rewards = []
-    #losses = []
-    #moving_averages = []
+    rewards = []
+    losses = []
 
-    
-    #with trange(config.training_episodes) as pbar:
-        #for i in pbar:
     for i in range(config.training_episodes):
 
-            t = time.time()
-            
-            launch_selfplay_jobs(config, storage, replay_buffer)
+        t = time.time()
+        
+        launch_selfplay_jobs(config, storage, replay_buffer, i+1, render_ai)
 
-            # print and plot rewards
-            game = replay_buffer.last_game()
-            reward_e = game.total_rewards()
-            #rewards.append(reward_e)
-            #moving_averages.append(np.mean(rewards[-20:]))
+        # print and plot rewards
+        game = replay_buffer.last_game()
+        reward_e = game.total_rewards()
+        
+        if len(rewards) > 100:
+            rewards.pop()
+        rewards.append(reward_e)
+    
+        # training
+        loss = train_network(config, storage, replay_buffer, i)
 
-            #moving_avg = np.mean(
-            #    rewards[-50:]) if len(rewards) >= 50 else np.mean(rewards)
-            # pbar.set_description(f"Episode {i+1} | Reward: {reward_e:.2f}")
-            # pbar.set_postfix(moving_avg=f"{moving_avg:.2f}", elapsed_time='Elapsed time: ' + str(
-            #     (time.time() - t) / 60) + ' minutes')
+        if len(losses) > 100:
+            losses.pop()
+        losses.append(loss)
+        
+        
+        print(torch.cuda.memory_summary())
+        torch.cuda.empty_cache()
+        
+        print(f'Episode: ({i+1}/{config.training_episodes}) [+Reward: {reward_e} | -Loss: {loss}]')
+        print(f'* Moving Average: (20) [+Rewards: {np.mean(rewards[-20:])} | -Losses: {np.mean(losses[-20:])}]')
+        print(f'* Moving Average: (100) [+Rewards: {np.mean(rewards[-100:])} | -Losses: {np.mean(losses[-100:])}]')
+        
+        total_episode_time = str((time.time() - t) / 60)
+        storage.update_elapsed_time(total_episode_time)
 
-            #print('Moving Average (20): ' + str(np.mean(rewards[-20:])))
-            #print('Moving Average (100): ' + str(np.mean(rewards[-100:])))
-            #print('Moving Average: ' + str(np.mean(rewards)))      
-
-            # training
-            loss = train_network(config, storage, replay_buffer, i)
-
-            # print and plot loss
-            #print(f'Loss: {loss} @ episode: {i+1}')
-            #losses.append(loss)
-            
-            print(torch.cuda.memory_summary())
-            torch.utils.checkpoint
-            torch.cuda.empty_cache()
-            
-            print('Episode: (' + str(i+1) + '/' + str(config.training_episodes) + ') | Reward: ' + str(reward_e))
-            total_elapsed_time = str((time.time() - t) / 60)
-            storage.update_elapsed_time(total_elapsed_time)
-
-    #plt.plot(rewards)
-    #plt.plot(moving_averages)
-    #plt.plot(losses)
-    #plt.show()
 
     config.finish_game()
+
+    config.display_final_stats(rewards=rewards, losses=losses)
+
 
 ######### End Training ###########
 ##################################
@@ -278,4 +266,5 @@ def muzero(config: RicochetConfig):
 
 # Entry-point function
 if __name__ == "__main__":
-    muzero(make_ricochet_config())
+    
+    muzero(config=make_ricochet_config(render_ai=False), render_ai=False)

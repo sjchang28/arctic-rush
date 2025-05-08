@@ -6,8 +6,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.muzero import RicochetConfig
-from core.state import RicochetGame
+from core.muzero import RicochetRobotsConfig
+from core.state import RicochetRobotsGame
+
+from config import WEIGHTS_FILE_PATH
 
 
 ##########################
@@ -17,7 +19,7 @@ GPU_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class ReplayBuffer(object):
 
-    def __init__(self, config: RicochetConfig):
+    def __init__(self, config: RicochetRobotsConfig):
         
         self.window_size = config.window_size
         self.batch_size = config.batch_size
@@ -38,17 +40,27 @@ class ReplayBuffer(object):
                  g.make_target(i, num_unroll_steps, td_steps, action_space_size))
                 for (g, i) in game_pos]
 
-    def sample_game(self) -> RicochetGame:
+    def sample_game(self) -> RicochetRobotsGame:
         
         # Sample game from buffer either uniformly or according to some priority.
         return self.buffer[np.random.choice(range(len(self.buffer)))]
 
     def sample_position(self, game) -> int:
         
-        # Sample position from game either uniformly or according to some priority.
-        return np.random.choice(range(game.total_games() - 1))
+        try:
+            
+            # Sample position from game either uniformly or according to some priority.
+            return np.random.choice(range(game.total_moves()-1))
+            
+        except ValueError as e:
+        
+            print("⚠️ Invalid Sample taken")
+            print(f"Debug: {range(game.total_moves()-1)}, {game.total_moves()}")
+
+            raise e
+        
     
-    def last_game(self) -> RicochetGame:
+    def last_game(self) -> RicochetRobotsGame:
         
         return self.buffer[-1]
 
@@ -110,10 +122,10 @@ class Network(nn.Module):
             nn.Linear(hidden, hidden)
         ) 
         
-        print(GPU_DEVICE)
+        print(f"Hello, I'm Leela! Ready to begin training on device {str(GPU_DEVICE).upper()} ...")
         self.to(GPU_DEVICE)
                 
-    def save_model(self, path="muzero_full_weights.pth"):
+    def save_model(self, path=WEIGHTS_FILE_PATH):
         
         # Get absolute path to the model_weights.json file
         current_dir = os.path.dirname(__file__)
@@ -122,7 +134,7 @@ class Network(nn.Module):
         torch.save(self.state_dict(), model_weights_file)
 
 
-    def load_model(self, path="muzero_full_weights.pth"):
+    def load_model(self, path=WEIGHTS_FILE_PATH):
         
         # Get absolute path to the model_weights.json file
         current_dir = os.path.dirname(__file__)
@@ -148,6 +160,8 @@ class Network(nn.Module):
 
         policy_dict = {a: policy_probs[0, a].item() for a in range(self.action_space_size)}
 
+        
+        
         return NetworkOutput(
             value=value,
             reward=reward,
@@ -226,7 +240,7 @@ class Network(nn.Module):
 
 class SharedStorage:
     
-    def __init__(self, config, path="muzero_full_weights.pth"):
+    def __init__(self, config, path=WEIGHTS_FILE_PATH):
         self.networks = {}  # Dictionary to store networks by step
         self.latest_step = 0
         
@@ -270,11 +284,10 @@ class SharedStorage:
             # Read the current elapsed time from the file (if it exists)
             with open(elapsed_time_file, 'r') as file:
                 current_time = file.read().strip()
-                print(f"Total Elapsed Time: {current_time} minutes")
             
             # Update the time by adding the new value
             updated_time = float(current_time) + float(new_time) if current_time else new_time
-            print(f"Updated time: {updated_time} minutes")
+            print(f"Total Elapsed Time: {updated_time} minutes [+{new_time} min/ep]\n")
             
         except FileNotFoundError:
             # If the file doesn't exist, start with the new time

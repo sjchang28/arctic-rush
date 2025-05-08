@@ -1,11 +1,11 @@
 import collections
+import numpy as np
+import matplotlib.pyplot as plt
 from typing import Tuple, Optional
 
-from config import BOARD_WIDTH, BOARD_HEIGHT, NUMBER_OF_PENGUINS, NUMBER_OF_POSSIBLE_MOVES, INDEX_COLOR_MAP, UP, RIGHT, DOWN, LEFT, TOTAL_MCTS_EPISODES, MAX_TOTAL_MOVES_PER_GAME
+from core.state import RicochetRobotsGame
 
-from game.penguins import Penguin
-from game.target import Target
-from core.state import RicochetGame
+from config import BOARD_WIDTH, BOARD_HEIGHT, NUMBER_OF_POSSIBLE_MOVES, NUMBER_OF_ROBOTS, TOTAL_MCTS_EPISODES, MAX_TOTAL_MOVES_PER_GAME
 
 
 ##########################
@@ -59,10 +59,10 @@ class MuZeroConfig(object):
 
         # Training
         self.training_steps = int(500e3)
-        self.checkpoint_interval = int(1e3)
-        self.window_size = int(1000)
+        self.checkpoint_interval = int(1e2)
+        self.window_size = int(500) # 1000
         self.batch_size = batch_size
-        self.num_unroll_steps = 500
+        self.num_unroll_steps = MAX_TOTAL_MOVES_PER_GAME
         self.td_steps = td_steps
 
         self.weight_decay = 1e-4
@@ -76,76 +76,6 @@ class MuZeroConfig(object):
         self.lr_init = lr_init
         self.lr_decay_rate = 0.1
         self.lr_decay_steps = lr_decay_steps
-
-    
-    def reconstruct_walls(self, flat):
-        
-        walls = []
-        idx = 0
-        for row in range(BOARD_HEIGHT):
-            wall_row = []
-            for col in range(BOARD_WIDTH):
-                cell = {
-                    UP: bool(flat[idx]),
-                    RIGHT: bool(flat[idx+1]),
-                    DOWN: bool(flat[idx+2]),
-                    LEFT: bool(flat[idx+3]),
-                }
-                wall_row.append(cell)
-                idx += 4
-            walls.append(wall_row)
-        return walls
-
-
-    def reconstruct_penguins(self, flat):
-        
-        penguins = []
-        for i in range(0, len(flat), 3):
-            x = int(flat[i])
-            y = int(flat[i+1])
-            # You should define INDEX_TO_COLOR = {0: "red", ...}
-            color = INDEX_COLOR_MAP[int(flat[i+2])]
-            penguins.append(Penguin(x, y, color))
-        return penguins
-
-
-    def reconstruct_target(self, flat):
-        x = int(flat[0])
-        y = int(flat[1])
-        color = INDEX_COLOR_MAP[int(flat[2])]
-        return Target(x, y, color)
-
-
-    def decode_state(self, encoded_state):
-        
-        # Constants
-        board_flat_size = BOARD_WIDTH * BOARD_HEIGHT * 4  # 4 directions per cell
-        penguin_flat_size = NUMBER_OF_PENGUINS * 3        # x, y, color
-        target_flat_size = 3                              # x, y, color_idx
-
-        # * Board
-        board_flat = encoded_state[0:board_flat_size]
-        walls = self.reconstruct_walls(board_flat)
-
-        # * Penguins
-        start = board_flat_size
-        end = start + penguin_flat_size
-        penguins_flat = encoded_state[start:end]
-        penguins = self.reconstruct_penguins(penguins_flat)
-
-        # * Target
-        start = end
-        end = start + target_flat_size
-        target_flat = encoded_state[start:end]
-        target = self.reconstruct_target(target_flat)
-
-        # * Selected Penguin
-        selected_penguin_idx = int(encoded_state[-2])
-
-        # * Move Counter
-        move_counter = int(encoded_state[-1])
-
-        return walls, penguins, target, selected_penguin_idx, move_counter
     
     
     def action_to_index(robot_index: int, direction: int) -> int:
@@ -169,23 +99,24 @@ def visit_softmax_temperature(num_moves, training_steps):
         return 0.5
     
 
-class RicochetConfig(MuZeroConfig):
+class RicochetRobotsConfig(MuZeroConfig):
     
     def __init__(self,
-                action_space_size=(NUMBER_OF_PENGUINS * NUMBER_OF_POSSIBLE_MOVES),
+                action_space_size=(NUMBER_OF_ROBOTS * NUMBER_OF_POSSIBLE_MOVES),
                 observation_space_size=(BOARD_WIDTH * BOARD_HEIGHT * 4) + 3 + (4 * 3) + 1 + 1,
                 max_moves=MAX_TOTAL_MOVES_PER_GAME,
                 discount=1.0,
                 dirichlet_alpha=0.25,
                 num_simulations=TOTAL_MCTS_EPISODES,
-                batch_size=128,
+                batch_size=16,
                 td_steps=MAX_TOTAL_MOVES_PER_GAME,  # Same as max_moves
                 num_actors=1,
                 lr_init=0.005,
                 lr_decay_steps=100000,
-                training_episodes=100000,
+                training_episodes=120,
                 hidden_layer_size=64,
-                visit_softmax_temperature_fn=visit_softmax_temperature):
+                visit_softmax_temperature_fn=visit_softmax_temperature,
+                render_mode=False):
 
         super().__init__(
             action_space_size=action_space_size,
@@ -205,11 +136,14 @@ class RicochetConfig(MuZeroConfig):
         )
         
         self.game = None
+        
+        self.render_mode = render_mode
   
   
     def new_game(self):
-
-        self.game = RicochetGame(self.action_space_size, self.discount)
+        
+        self.game = RicochetRobotsGame(self.action_space_size, self.discount, render_ai=self.render_mode)
+            
         return self.game
     
     
@@ -221,12 +155,46 @@ class RicochetConfig(MuZeroConfig):
     def finish_game(self):
         
         self.game.environment.close()
-    
+        
+        print("[Finished Training.] ☞ó ͜つò☞ Stay Golden, Ponyboy!")
         
         
-def make_ricochet_config() -> MuZeroConfig:
+    def display_final_stats(self, rewards, losses):
+        
+        # Sort by rewards, preserving index alignment
+        combined = sorted(zip(rewards, losses))
+        sorted_rewards, sorted_losses = zip(*combined)
 
-    return RicochetConfig()
+        plt.figure()
+        plt.plot(sorted_rewards, sorted_losses, marker='o', label='Loss vs Reward')
+
+        # Adding labels and title
+        plt.xlabel('Rewards')
+        plt.ylabel('Losses')
+        plt.title('Loss Decreases as Rewards Increase')
+        plt.legend()
+        plt.grid(True)
+        
+        # Histogram - Rewards
+        plt.figure()
+        plt.boxplot([rewards], labels=['Rewards'])
+        
+        plt.title("Boxplot of Rewards")
+        plt.ylabel("Value")
+        
+        # Histogram - Losses
+        plt.figure()
+        plt.boxplot([losses], labels=['Losses'])
+        
+        plt.title("Boxplot of Losses")
+        plt.ylabel("Value")
+        
+        plt.show()   
+            
+        
+def make_ricochet_config(render_ai=False) -> MuZeroConfig:
+
+    return RicochetRobotsConfig(render_mode=render_ai)
 
      
 ##### End Helpers ########
