@@ -1,0 +1,46 @@
+﻿# Deployment only. Every training knob lives in src/config.py -- it is the single
+# source of truth, and it is env-overridable, so anything set here silently wins
+# over what that file says. Values were split across both once; the result was
+# that reading either one alone described a run nobody was doing.
+#
+# What legitimately belongs here is what differs *between deployments*:
+#   RUN_ID   separates one run's checkpoints and logs from another's
+#   NVIDIA_* GPU wiring for the container runtime
+#
+# MODEL_DIR / LOG_DIR are set in the Dockerfile, since they are container paths
+# onto the mounted volume rather than tuning.
+#
+# Note that an `environment:` mapping does not forward host variables, so
+# `SEARCH_MODE=muzero docker compose up` would not reach the container. To run a
+# variant without editing src/config.py, pass it explicitly:
+#   docker compose run -e RUN_ID=sweep-a -e SEARCH_MODE=muzero train-alphazero
+
+x-train-common: &train-common
+  image: arctic-rush-train
+  build:
+    context: ./
+    dockerfile: Dockerfile
+    target: train
+  volumes:
+    - ./data/models:/data/models
+    - ./data/logs:/data/logs
+  runtime: nvidia
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            capabilities: [gpu]
+
+x-train-env: &train-env
+  NVIDIA_VISIBLE_DEVICES: all
+  NVIDIA_DRIVER_CAPABILITIES: compute,utility
+
+services:
+
+  # Real simulator in the tree (src/config.py: SEARCH_MODE defaults to alphazero).
+  train-alphazero:
+    <<: *train-common
+    environment:
+      <<: *train-env
+      RUN_ID: alphazero

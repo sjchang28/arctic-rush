@@ -1,0 +1,52 @@
+﻿# Render with envsubst before applying, e.g.:
+#   RUN_ID=variant-a envsubst '$RUN_ID' < k8s/job-template.yaml | kubectl apply -f -
+#
+# Repeat with a different RUN_ID per variant to run several training jobs
+# concurrently against the shared PVC. See k8s/README.md for the GPU
+# time-slicing setup required to actually schedule more than one at once on a
+# single physical GPU.
+#
+# Tuning lives in src/config.py and nowhere else. This template used to restate
+# defaults for a handful of settings, which meant a job could silently run
+# TOTAL_MCTS_EPISODES=100 while src/config.py said 50 -- the file you read was not
+# the run you got. To sweep a setting, add it here as an explicit override:
+#
+#           - name: TOTAL_MCTS_EPISODES
+#             value: "100"
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: train-${RUN_ID}
+  namespace: arctic-rush
+  labels:
+    app: arctic-rush-train
+    run-id: "${RUN_ID}"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: arctic-rush-train
+        run-id: "${RUN_ID}"
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: train
+          image: arctic-rush-train
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: RUN_ID
+              value: "${RUN_ID}"
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: "expandable_segments:True"
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: arctic-rush-data

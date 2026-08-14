@@ -1,4 +1,4 @@
-# Initialization
+﻿# Initialization
 # Runs game loop
 # Event/screen handling
 
@@ -6,10 +6,11 @@
 # Stores wall data
 
 import pygame
-from config import SCREEN_WIDTH, SCREEN_HEIGHT, TILE_SIZE, BOARD_WIDTH, FPS, WHITE, DARK_GREY, UP, DOWN, LEFT, RIGHT
-from game.board import Board
-from game.target import TargetDeck
-from game.robots import Robot, RobotManager
+from src.config import SCREEN_WIDTH, SCREEN_HEIGHT, TILE_SIZE, BOARD_WIDTH, FPS, WHITE, DARK_GREY, UP, DOWN, LEFT, RIGHT
+from src.game.board import Board
+from src.game.target import TargetDeck
+from src.game.robots import Robot, RobotManager
+from src.core.logger import logger
 
 class Game():
     
@@ -78,7 +79,7 @@ class Game():
                         if robots[self.robot_idx].move_until_blocked(simulated=False, direction=keys[event.key], board=self.board, other_robots=robots):
                             self.move_counter += 1
                             if robots[self.robot_idx].is_target_reached(self.target_deck.current_target):
-                                print("You Won in " + str(self.move_counter) + " moves!")
+                                logger.info(f"You Won in {self.move_counter} moves!")
                                 self.target_deck.set_new_target()
                                 self.robot_manager.reset_robots()
                                 self.move_counter = 0

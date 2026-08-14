@@ -1,10 +1,11 @@
-# Renders grid
+?# Renders grid
 # Stores wall data
 
 import pygame
 import math
 import json, os, numpy as np
-from config import LEVEL_FILE, TILE_SIZE, BOARD_WIDTH, BOARD_HEIGHT, ROBOT_COLORS, GREY, BLACK, UP, DOWN, LEFT, RIGHT
+from src.config import LEVEL_FILE, TILE_SIZE, BOARD_WIDTH, BOARD_HEIGHT, ROBOT_COLORS, GREY, BLACK, UP, DOWN, LEFT, RIGHT
+from src.core.logger import logger
 
 # Get absolute path to the level.json file
 current_dir = os.path.dirname(__file__)
@@ -21,7 +22,7 @@ class BouncePadManager:
     def _load_bounce_pads(self, bounce_pad_file):
         
         if not os.path.exists(bounce_pad_file):
-            print(f"❌ Bounce Pad file '{bounce_pad_file}' not found.")
+            logger.error(f"Bounce Pad file '{bounce_pad_file}' not found.")
             return
 
         with open(bounce_pad_file, "r") as f:
@@ -133,7 +134,7 @@ class Board:
     def _load_custom_walls(self, wall_file):
         
         if not os.path.exists(wall_file):
-            print(f"❌ Wall file '{wall_file}' not found.")
+            logger.error(f"Wall file '{wall_file}' not found.")
             return
 
         with open(wall_file, "r") as f:

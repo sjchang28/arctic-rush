@@ -128,3 +128,8 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# Per-run training output. Everything a run writes lands under data/, which is
+# also what the Docker/k8s volume mounts onto -- none of it is source.
+data/
+.pytest_cache/

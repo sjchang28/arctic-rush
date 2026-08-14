@@ -1,11 +1,12 @@
-# Tracks current target position and color
+﻿# Tracks current target position and color
 # Handles win condition
 
 import json, os, numpy as np
 import pygame
 import random
 
-from config import LEVEL_FILE, TILE_SIZE, COLOR_MAP, ROBOT_COLORS, BLACK, GREY
+from src.config import LEVEL_FILE, TILE_SIZE, COLOR_MAP, ROBOT_COLORS, BLACK, GREY
+from src.core.logger import logger
 
 # Get absolute path to the level.json file
 current_dir = os.path.dirname(__file__)
@@ -60,7 +61,7 @@ class TargetDeck:
     def _load_custom_deck(self, deck_file):
         
         if not os.path.exists(deck_file):
-            print(f"❌ Deck file '{deck_file}' not found.")
+            logger.error(f"Deck file '{deck_file}' not found.")
             return
 
         with open(deck_file, "r") as f:
@@ -96,7 +97,7 @@ class TargetDeck:
     def set_new_target(self):
         
         if not self.deck:
-            print("Deck is empty!")
+            logger.warning("Deck is empty!")
             return None
         
         attempts = 0

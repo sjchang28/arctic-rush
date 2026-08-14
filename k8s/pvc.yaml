@@ -1,0 +1,14 @@
+# Relies on the cluster's default StorageClass (Docker Desktop k8s ships
+# "hostpath", minikube ships "standard", k3s ships "local-path" — all
+# dynamic-provision automatically). Only add `storageClassName: <name>` /
+# a manual hostPath PV if `kubectl get storageclass` shows none available.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: arctic-rush-data
+  namespace: arctic-rush
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi

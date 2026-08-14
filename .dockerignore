@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.git/
+.gitignore
+.pytest_cache/
+tests/
+scripts/
+k8s/
+README.md
+*.lnk
+data/
