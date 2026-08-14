@@ -1,9 +1,26 @@
-?# robot class
-import numpy as np
+# robot class
 import random
+
+import numpy as np
 import pygame
-from src.config import (BOARD_WIDTH, BOARD_HEIGHT, TILE_SIZE, ALL_DIRECTIONS, SWITCH,
-                    ROBOT_COLORS, COLOR_MAP, GREY, PINK, UP, DOWN, LEFT, RIGHT)
+
+from src.game.config import (
+    ALL_DIRECTIONS,
+    BOARD_HEIGHT,
+    BOARD_WIDTH,
+    COLOR_MAP,
+    DOWN,
+    GREY,
+    LEFT,
+    PINK,
+    RIGHT,
+    ROBOT_COLORS,
+    SWITCH,
+    TILE_SIZE,
+    UP,
+    center_squares,
+)
+
 
 class Robot:
     def __init__(self, color, x=None, y=None):
@@ -136,7 +153,7 @@ class RobotManager:
         `forbidden_extra` keeps robots off squares the caller wants left empty --
         the current target, so an episode cannot start already solved.
         """
-        forbidden_positions = {(7, 7), (7, 8), (8, 7), (8, 8)} # Avoid center
+        forbidden_positions = set(center_squares())  # Avoid center
         forbidden_positions.update(forbidden_extra)
         available_positions = [
             (x, y)
@@ -219,8 +236,9 @@ class RobotManager:
         one move out, and a backward random walk barely ever leaves that set.
 
         Treat this as a shallow-position generator, not a difficulty dial. The
-        curriculum in `RicochetRobotsEnv._reset_from_curriculum` uses it only for
-        depth 1-2 and gets the deeper levels by solving random positions instead.
+        curriculum in `src.game.curriculum.CurriculumGenerator.generate` uses it
+        only for depth 1-2 and gets the deeper levels by solving random positions
+        instead.
 
         `avoid_square` is refused as a destination for the goal robot -- putting
         it back on the target would produce an already-solved position.
@@ -228,34 +246,11 @@ class RobotManager:
 
         for move_number in range(num_moves):
 
-            candidates = []
-            solver_candidates = []
-
-            for index, robot in enumerate(self.robots):
-
-                if move_number == 0 and required_first is not None and index != required_first:
-                    continue
-
-                for direction in ALL_DIRECTIONS:
-
-                    # If the robot could still move this way, it cannot have
-                    # arrived here by sliding in this direction.
-                    if robot.move_until_blocked(
-                        simulated=True, direction=direction,
-                        board=self.board, other_robots=self.robots
-                    ):
-                        continue
-
-                    for square in self._predecessor_squares(robot, direction):
-
-                        if (index == solver_index and avoid_square is not None
-                                and square == avoid_square):
-                            continue
-
-                        candidates.append((index, square))
-
-                        if index == solver_index:
-                            solver_candidates.append((index, square))
+            only_robot = required_first if move_number == 0 else None
+            candidates, solver_candidates = self._backward_candidates(
+                only_robot=only_robot, solver_index=solver_index,
+                avoid_square=avoid_square,
+            )
 
             if not candidates:
                 break
@@ -269,6 +264,46 @@ class RobotManager:
             robot.x, robot.y = square
             robot.prev_x, robot.prev_y = square
             robot.robotLeftTarget = False
+
+
+    def _backward_candidates(self, only_robot=None, solver_index=None, avoid_square=None):
+        """Every (robot, square) a single backward move could undo.
+
+        Returns (all candidates, those belonging to the goal robot). `only_robot`
+        restricts the search to one robot, which is how the first backward move
+        is pinned to the goal robot.
+        """
+
+        candidates = []
+        solver_candidates = []
+
+        for index, robot in enumerate(self.robots):
+
+            if only_robot is not None and index != only_robot:
+                continue
+
+            for direction in ALL_DIRECTIONS:
+
+                # If the robot could still move this way, it cannot have
+                # arrived here by sliding in this direction.
+                if robot.move_until_blocked(
+                    simulated=True, direction=direction,
+                    board=self.board, other_robots=self.robots
+                ):
+                    continue
+
+                for square in self._predecessor_squares(robot, direction):
+
+                    if (index == solver_index and avoid_square is not None
+                            and square == avoid_square):
+                        continue
+
+                    candidates.append((index, square))
+
+                    if index == solver_index:
+                        solver_candidates.append((index, square))
+
+        return candidates, solver_candidates
 
     def get_all_legal_moves(self, selected_idx=None):
         """Legal (robot_index, direction) pairs.

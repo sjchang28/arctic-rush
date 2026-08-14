@@ -1,7 +1,12 @@
-﻿"""Manual visual playback of a trained checkpoint.
+"""Manual visual playback of a trained checkpoint.
 
-Not a pytest module -- run it directly. `pytest` collects nothing here because no
-function is named `test_*`.
+Run it directly: `python -m scripts.play_model`.
+
+This lived at `tests/test.py`, inside pytest's `testpaths`, despite being a
+pygame demo rather than a test. It was only excluded from collection by the
+accident of its filename not matching `test_*.py` -- rename it to anything more
+descriptive and pytest would have started importing pygame and the whole
+training stack during collection.
 """
 
 import time
@@ -10,10 +15,10 @@ import pygame
 import torch
 
 from src.core.logger import logger
-from src.core.mcts import Node, expand_root, run_gumbel_mcts, run_mcts, RealEnvironmentModel
-from src.core.muzero import make_ricochet_config
-from src.core.network import Network
-from src.core.train import select_action
+from src.model.mcts import Node, RealEnvironmentModel, expand_root, run_gumbel_mcts, run_mcts
+from src.model.muzero import make_ricochet_config
+from src.model.network import Network
+from src.model.train import select_action
 
 
 @torch.no_grad()

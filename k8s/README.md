@@ -1,4 +1,4 @@
-?# arctic-rush on local Kubernetes
+# arctic-rush on local Kubernetes
 
 ## Setup
 
@@ -63,7 +63,7 @@ Then point the device plugin DaemonSet at this ConfigMap (via its Helm
 installed) and restart it.
 
 Keep `replicas` modest (2-3). This model already risks VRAM pressure at full
-`NUM_UNROLL_STEPS` (see `src/config.py`), and time-slicing gives no memory
+`NUM_UNROLL_STEPS` (see `src/model/config.py`), and time-slicing gives no memory
 isolation between concurrent runs on the same physical GPU — an OOM in one
 run can affect others sharing the slice.
 

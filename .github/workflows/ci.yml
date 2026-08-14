@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # torch is pinned to the CUDA wheel index in pyproject.toml. CI has no GPU
+      # and those wheels are large, so the CPU index is substituted for the
+      # install only -- nothing in the test suite requires CUDA (GPU_DEVICE
+      # falls back to cpu). The lockfile is still what pins every other version.
+      - name: Install dependencies
+        env:
+          UV_INDEX_PYTORCH_CU126_URL: https://download.pytorch.org/whl/cpu
+        run: uv sync --group dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+      # The learning tests train a network for hundreds of steps; they are
+      # marked `slow` and left to the nightly job rather than run per push.
+      - name: Test
+        env:
+          SDL_VIDEODRIVER: dummy
+        run: uv run pytest -q -m "not slow"
+
+  slow-test:
+    # The end-to-end learning tests are the ones that catch divergence-to-NaN,
+    # so they do run -- just not on the per-push path.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        env:
+          UV_INDEX_PYTORCH_CU126_URL: https://download.pytorch.org/whl/cpu
+        run: uv sync --group dev
+
+      - name: Test (slow)
+        env:
+          SDL_VIDEODRIVER: dummy
+        run: uv run pytest -q -m slow

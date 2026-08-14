@@ -1,4 +1,4 @@
-﻿"""Search and network-head tests.
+"""Search and network-head tests.
 
 Each test here pins a bug from the Phase 1 correctness pass.
 """
@@ -9,12 +9,12 @@ import numpy as np
 import pytest
 import torch
 
-from src.config import AI_OBSERVATION_SHAPE
-from src.core.mcts import Node, expand_node, run_gumbel_mcts, run_mcts
-from src.core.muzero import make_ricochet_config
-from src.core.network import Network
-from src.core.support import support_to_scalar
-from src.core.train import select_action, softmax_sample
+from src.model.config import AI_OBSERVATION_SHAPE
+from src.model.mcts import Node, expand_node, run_mcts
+from src.model.muzero import make_ricochet_config
+from src.model.network import Network
+from src.model.support import support_to_scalar
+from src.model.train import select_action, softmax_sample
 
 
 @pytest.fixture(scope="module")
@@ -30,7 +30,7 @@ def network(config):
 def _fake_output(logits, action_space_size):
     """A NetworkOutput-shaped stub carrying known logits."""
 
-    from core.network import NetworkOutput
+    from src.model.network import NetworkOutput
 
     return NetworkOutput(
         value=torch.zeros(1),

@@ -98,6 +98,9 @@ celerybeat.pid
 # Environments
 .env
 .env.*
+# The template carries no secrets and is meant to be committed; without this it
+# is caught by `.env.*` above and silently never tracked.
+!.env.example
 .venv
 venv/
 ENV/

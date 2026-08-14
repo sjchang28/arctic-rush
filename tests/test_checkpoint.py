@@ -1,4 +1,4 @@
-﻿"""Best-weights checkpointing.
+"""Best-weights checkpointing.
 
 One weights file, written on merit. These pin the two ways "save the best" gets
 it wrong: overwriting a good checkpoint with a degraded one, and freezing the
@@ -11,7 +11,7 @@ import os
 import pytest
 
 from src.config import settings
-from src.core.network import SharedStorage
+from src.model.storage import SharedStorage
 
 
 class _FakeNetwork:

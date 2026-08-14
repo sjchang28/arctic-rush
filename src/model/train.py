@@ -1,13 +1,20 @@
-?import time
 import collections
-import numpy as np
 import threading
+import time
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
-from src.core.mcts import (
-    ActionHistory,
+from src.config import settings
+from src.core.boot import stream_banner
+from src.model.config import (
+    EMPTY_CACHE_EVERY_N_EPISODES,
+    MIN_REPLAY_GAMES,
+)
+from src.model.device import gpu_device
+from src.model.logging_lines import excess_moves, log_episode, log_moving_averages
+from src.model.mcts import (
     Node,
     RealEnvironmentModel,
     expand_node,
@@ -15,16 +22,16 @@ from src.core.mcts import (
     run_gumbel_mcts,
     run_mcts,
 )
-from src.core.muzero import RicochetRobotsConfig, make_ricochet_config
-from src.core.network import Network, SharedStorage, ReplayBuffer
-from src.core.state import RicochetRobotsGame
-from src.core.support import scalar_to_support, support_to_scalar
-from src.core.logger import logger
-from src.core.boot import report_ready, stream_banner
-
-from src.config import settings
-
-GPU_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from src.model.muzero import RicochetRobotsConfig, make_ricochet_config
+from src.model.network import Network
+from src.model.plots import display_final_stats
+from src.model.promotion import maybe_promote_curriculum
+from src.model.replay import ReplayBuffer
+from src.model.reporting import report_ready
+from src.model.state import RicochetRobotsGame
+from src.model.storage import SharedStorage
+from src.model.support import scalar_to_support, support_to_scalar
+from src.model.types import ActionHistory
 
 
 def softmax_sample(distribution, temperature: float):
@@ -364,82 +371,6 @@ def reanalyse_game(config, network, game):
         game.root_values[index] = root.value()
 
 
-def maybe_promote_curriculum(config, solved, depths, episode) -> bool:
-    """Deepen the reverse curriculum once the agent is reliably solving.
-
-    The curriculum only helps while it is the *edge* of what the agent can do.
-    Held at a fixed depth it stops teaching anything the moment the agent
-    saturates it; ramped, each level is learned from a position where the
-    previous level already supplies most of the answer.
-
-    Promotion needs a full window of recent history so a lucky streak cannot
-    push the agent to a depth it cannot handle.
-
-    It also needs the positions to be as hard as the level claims. Scramble depth
-    is only an upper bound on true difficulty, so a solved rate on its own can
-    promote every single window on positions that never got deeper than one move
-    -- the failure this gate exists to catch. `depths` carries the exact optimal
-    lengths measured by `game.solver`, and a level whose generated positions are
-    too shallow refuses to promote and says so.
-    """
-
-    if config.curriculum_moves <= 0 or config.curriculum_moves >= settings.CURRICULUM_MAX_MOVES:
-        return False
-
-    window = settings.CURRICULUM_PROMOTE_WINDOW
-    if len(solved) < window:
-        return False
-
-    recent = list(solved)[-window:]
-    if float(np.mean(recent)) < settings.CURRICULUM_PROMOTE_THRESHOLD:
-        return False
-
-    measured = [d for d in list(depths)[-window:] if d is not None]
-
-    # Verification off entirely: nothing to check against, so the solved rate is
-    # all there is. Deliberately permissive -- opting out is opting out.
-    if settings.CURRICULUM_VERIFY_DEPTH:
-
-        # Every episode in the window would repeat these, so report on the
-        # window's own cadence.
-        loud = episode % window == 0
-
-        if len(measured) < window // 2:
-            if loud:
-                logger.warning(
-                    f"[Curriculum] Episode {episode}: only {len(measured)}/{window} recent "
-                    f"episodes had a verifiable optimal depth at level "
-                    f"{config.curriculum_moves}. Holding -- promoting here would be "
-                    f"promoting on unmeasured difficulty. Raise SOLVER_NODE_BUDGET to "
-                    f"push further."
-                )
-            return False
-
-        mean_depth = float(np.mean(measured))
-        required = settings.CURRICULUM_MIN_DEPTH_RATIO * config.curriculum_moves
-        if mean_depth < required:
-            if loud:
-                logger.warning(
-                    f"[Curriculum] Episode {episode}: solved {np.mean(recent):.0%} but the "
-                    f"generated positions average only {mean_depth:.1f} optimal moves at "
-                    f"depth {config.curriculum_moves} (need {required:.1f}). Holding -- the "
-                    f"solved rate is measuring easier puzzles than the level claims."
-                )
-            return False
-
-    config.set_curriculum_moves(config.curriculum_moves + 1)
-
-    depth_note = f", mean optimal depth {np.mean(measured):.1f}" if measured else ""
-    logger.info(
-        f"[Curriculum] Episode {episode}: solved {np.mean(recent):.0%} of the last "
-        f"{window}{depth_note} -- promoting to depth {config.curriculum_moves}."
-    )
-
-    # Start the next window fresh; the old history describes the easier level.
-    solved.clear()
-    depths.clear()
-    return True
-
 
 def maybe_reanalyse(config, network, replay_buffer):
 
@@ -521,78 +452,6 @@ def launch_selfplay_jobs(config, storage, replay_buffer, render_ai):
         t.join()
 
 
-def _fmt(value, spec=".3f"):
-    """Format a float, rendering NaN as a dash so columns stay aligned."""
-    return "--".rjust(len(format(0.0, spec))) if value != value else format(value, spec)
-
-
-def _excess_moves(game):
-    """Moves spent above the optimum, or None when either number is unknown.
-
-    This is the metric that says whether the agent is playing *well* rather than
-    merely finishing: zero means it found a shortest solution.
-    """
-
-    if game.optimal_depth is None or not game.is_terminal():
-        return None
-
-    return game.total_moves() - game.optimal_depth
-
-
-def log_episode(episode, total_episodes, game, reward, loss):
-    """One compact line per episode: index, outcome, reward, loss.
-
-    The per-episode line is the log's backbone, so it stays a single row of
-    fixed-width columns -- three wrapped lines per episode made consecutive
-    episodes impossible to tell apart in `docker logs`.
-    """
-
-    width = len(str(total_episodes))
-    solved = game.is_terminal()
-
-    # Only the verdict is coloured; padding sits outside the tag so the columns
-    # after it still line up.
-    verdict = "solved" if solved else "failed"
-    colour = "green" if solved else "red"
-    tail = (f" in {game.total_moves():>3} moves" if solved
-            else f" after {game.total_moves():>3} moves").ljust(22 - len(verdict))
-
-    # "solved in 1" reads as success until you know the position needed 1 move.
-    optimal = game.optimal_depth
-    best = f"| best {optimal:>2} " if optimal is not None else ""
-
-    logger.opt(colors=True).info(
-        f"Ep {episode:>{width}}/{total_episodes} | <{colour}>{verdict}</{colour}>{tail} "
-        f"{best}| reward {_fmt(reward, '+.2f')} | loss {_fmt(loss, '.4f')}"
-    )
-
-
-def log_moving_averages(episode, rewards, losses, solved, depths=()):
-    """Emit the rolling averages on their own cadence, highlighted in blue.
-
-    nanmean: episodes before MIN_REPLAY_GAMES record no loss.
-    """
-
-    for window in (settings.LOG_SHORT_AVG_EVERY, settings.LOG_LONG_AVG_EVERY):
-
-        if window <= 0 or episode % window != 0:
-            continue
-
-        rate = float(np.mean(solved[-window:])) if solved else float('nan')
-
-        # The solved rate is only interpretable next to the difficulty it was
-        # earned on, so the two are reported together or not at all.
-        measured = [d for d in list(depths)[-window:] if d is not None]
-        depth_note = f"| best {float(np.mean(measured)):.1f} " if measured else ""
-
-        logger.opt(colors=True).info(
-            f"<blue>---- last {window:>3} episodes @ Ep {episode} "
-            f"| solved {rate:.0%} "
-            f"{depth_note}"
-            f"| reward {_fmt(float(np.mean(rewards[-window:])), '+.2f')} "
-            f"| loss {_fmt(float(np.nanmean(losses[-window:])), '.4f')} ----</blue>"
-        )
-
 
 # MuZero training is split into two independent parts:
 # Network training and self-play data generation.
@@ -615,7 +474,7 @@ def muzero(config: RicochetRobotsConfig, render_ai: bool = False):
 
     # Reported here rather than in the banner: the network is built by now, so
     # every line is a fact about this run instead of a promise.
-    report_ready(config, storage.get_latest_network(), GPU_DEVICE)
+    report_ready(config, storage.get_latest_network(), gpu_device())
 
     rewards = collections.deque(maxlen=100)
     losses = collections.deque(maxlen=100)
@@ -643,7 +502,7 @@ def muzero(config: RicochetRobotsConfig, render_ai: bool = False):
         # training. Hold off until the buffer has a few games, otherwise the
         # first batches are every position of a single trajectory.
         loss_parts = {}
-        if len(replay_buffer) >= settings.MIN_REPLAY_GAMES:
+        if len(replay_buffer) >= MIN_REPLAY_GAMES:
 
             # Refresh stale targets on stored games before training on them.
             maybe_reanalyse(config, storage.get_latest_network(), replay_buffer)
@@ -656,7 +515,7 @@ def muzero(config: RicochetRobotsConfig, render_ai: bool = False):
         losses.append(loss)
 
         # empty_cache() forces a device sync, so it is not worth doing every episode.
-        if (i + 1) % settings.EMPTY_CACHE_EVERY_N_EPISODES == 0 and torch.cuda.is_available():
+        if (i + 1) % EMPTY_CACHE_EVERY_N_EPISODES == 0 and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
         recent_rewards, recent_losses = list(rewards), list(losses)
@@ -672,7 +531,7 @@ def muzero(config: RicochetRobotsConfig, render_ai: bool = False):
                             solved_rate=solved_rate, solution_length=game.total_moves(),
                             loss_parts=loss_parts, curriculum_moves=config.curriculum_moves,
                             optimal_depth=game.optimal_depth,
-                            excess_moves=_excess_moves(game))
+                            excess_moves=excess_moves(game))
         # Ranked by (curriculum level, rolling solved rate). Called after the
         # promotion check on purpose: the weights that just earned a promotion
         # are the ones worth keeping, and they are saved on that episode.
@@ -683,7 +542,7 @@ def muzero(config: RicochetRobotsConfig, render_ai: bool = False):
 
     config.finish_game()
 
-    config.display_final_stats(rewards=list(rewards), losses=list(losses))
+    display_final_stats(rewards=list(rewards), losses=list(losses))
 
 
 ######### End Training ###########

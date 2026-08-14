@@ -1,17 +1,19 @@
-﻿import copy
+import copy
 from typing import List
 
 import numpy as np
 
-from src.game.env import RicochetRobotsEnv, build_observation
-
-from src.config import (
+from src.game.config import (
     DIRECTION2INT,
     NUMBER_OF_DIRECTIONS,
+)
+from src.game.env import RicochetRobotsEnv, build_observation
+from src.model.config import (
     REWARD_PER_MOVE,
     REWARD_REPEAT_STATE,
     REWARD_SOLVE,
 )
+from src.model.types import ActionHistory
 
 
 def action_to_index(robot_index: int, direction: int) -> int:
@@ -26,37 +28,23 @@ def index_to_action(index: int):
     return divmod(int(index), NUMBER_OF_DIRECTIONS)
 
    
-class Environment(object):
-  
-    """The environment MuZero is interacting with."""
+class RicochetRobotEnvironment:
+    """What the search sees of the environment.
 
-    def step(self, action):
-        
-        pass
-    
-    
-class GymEnvironment(Environment):
-  
-    """The openAI gym environment MuZero is interacting with."""
+    Deliberately kept rather than collapsed into `RicochetRobotsEnv`: most
+    methods are passthroughs, but `legal_actions` encodes (robot, direction)
+    pairs into the flat action space the network works in, and `render` is gated
+    on `render_ai`. That encoding belongs on the learner's side of the boundary
+    -- pushing it into `src/game/` would make the environment import the model's
+    action encoding, which is the layering inversion Phase 2 removed.
 
-    def __init__(self):
-        
-        self.env = None
-        
-    
-    def step(self, action):
-        
-        pass
-    
-    
-class RicochetRobotEnvironment(GymEnvironment):
-  
-    """The openAI Ricochet gym environment MuZero is interacting with."""
+    The `Environment` / `GymEnvironment` bases this used to inherit from were
+    two empty classes whose only method was `pass`; nothing implemented or
+    dispatched on them.
+    """
 
     def __init__(self, render_ai: bool=False):
-        
-        super().__init__()
-        
+
         self.render_ai = render_ai
         self.env = RicochetRobotsEnv(render_ai=self.render_ai)
         
@@ -146,28 +134,7 @@ class RicochetRobotEnvironment(GymEnvironment):
         self.env.close()
     
 
-class Game(object):
-    
-    """A single episode of interaction with the environment."""
-
-    def create_environment(self):
-        
-        pass
-
-class GymGame(Game):
-    
-    """A single episode of interaction with an openAI gym environment."""
-    
-    def __init__(self):
-        
-        self.env = None
-        
-        
-    def create_gym_environment(self):
-        
-        pass
-    
-class RicochetRobotsGame(GymGame):
+class RicochetRobotsGame:
 
     """A single self-play trajectory.
 
@@ -441,9 +408,26 @@ class RicochetRobotsGame(GymGame):
         relabelled.child_visits = self.child_visits[:step + 1]
         relabelled.done = True
 
-        # Recompute rewards under the new goal: the truncated final move now solves.
+        relabelled.rewards = self._rewards_under_new_goal(relabelled)
+
+        # Note the one approximation here: `child_visits` was searched against the
+        # original goal, so the policy targets are the behaviour policy rather
+        # than a policy re-searched under the new goal. The action sequence does
+        # reach the relabelled goal, so the targets remain informative, but they
+        # are not the improved policy a fresh search would give. Re-searching
+        # every relabelled trajectory would cost as much as generating it.
+
+        relabelled.root_values = self._exact_returns(relabelled.rewards)
+
+        return relabelled
+
+
+    def _rewards_under_new_goal(self, relabelled):
+        """Rewards for the truncated trajectory, whose final move now solves."""
+
         rewards = []
         visited = {tuple(self.positions[0])}
+
         for i in range(len(relabelled.history)):
             reward = REWARD_PER_MOVE
             if i == len(relabelled.history) - 1:
@@ -456,34 +440,30 @@ class RicochetRobotsGame(GymGame):
                     visited.add(key)
             rewards.append(reward)
 
-        relabelled.rewards = rewards
+        return rewards
 
-        # Note the one approximation here: `child_visits` was searched against the
-        # original goal, so the policy targets are the behaviour policy rather
-        # than a policy re-searched under the new goal. The action sequence does
-        # reach the relabelled goal, so the targets remain informative, but they
-        # are not the improved policy a fresh search would give. Re-searching
-        # every relabelled trajectory would cost as much as generating it.
 
-        # Root values were searched against the *original* goal, so they are not
-        # valid bootstraps for the relabelled return. Recompute them as the actual
-        # discounted return from each position, which is exact here because the
-        # relabelled trajectory is known to end in a solve.
+    def _exact_returns(self, rewards):
+        """Discounted return from each position.
+
+        Root values were searched against the *original* goal, so they are not
+        valid bootstraps for the relabelled return. These are exact rather than
+        estimated, because the relabelled trajectory is known to end in a solve.
+        """
+
         returns = []
         running = 0.0
+
         for reward in reversed(rewards):
             running = reward + self.discount * running
             returns.append(running)
-        relabelled.root_values = list(reversed(returns))
 
-        return relabelled
+        return list(reversed(returns))
 
 
     ##### Misc #####
 
     def action_history(self):
-
-        from core.mcts import ActionHistory
 
         return ActionHistory(self.history, self.action_space_size)
 

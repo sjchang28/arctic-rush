@@ -1,12 +1,26 @@
-﻿import os
+import os
 import sys
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
 from src.config import settings
 
+# Timestamps are stamped in US Eastern rather than the host clock: the training
+# runs happen in containers whose clock is UTC, so a log line's time did not
+# line up with the wall clock anyone was reading it against. ZoneInfo (not a
+# fixed -05:00 offset) so DST is handled.
+EASTERN = ZoneInfo("America/New_York")
+
+
+def _to_eastern(record) -> None:
+    record["time"] = record["time"].astimezone(EASTERN)
+
+
+logger.configure(patcher=_to_eastern)
+
 LOG_FORMAT = (
-    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+    "<green>{time:YYYY-MM-DD HH:mm:ss zz}</green> | "
     "<level>{level: <8}</level> | "
     "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
     "<level>{message}</level>"
@@ -24,7 +38,7 @@ logger.level("CRITICAL", color="<red><bold><reverse>")
 # keeps: under `docker logs` it pushed the episode lines past the terminal width
 # and wrapped every one of them.
 CONSOLE_FORMAT = (
-    "<green>{time:HH:mm:ss}</green> | "
+    "<green>{time:YYYY-MM-DD HH:mm:ss zz}</green> | "
     "<level>{level: <7}</level> | "
     "<level>{message}</level>"
 )

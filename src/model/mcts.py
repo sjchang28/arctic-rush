@@ -1,17 +1,27 @@
-﻿import numpy as np
-import collections, math
+import math
 from typing import List, Optional
 
-from src.core.muzero import MuZeroConfig
-from src.core.network import Network, NetworkOutput
+import numpy as np
 
+from src.model.muzero import KnownBounds, MuZeroConfig
+from src.model.network import Network, NetworkOutput
+from src.model.types import ActionHistory  # noqa: F401  (re-exported; used in annotations below)
 
 ##########################
 ####### Helpers ##########
 
 MAXIMUM_FLOAT_VALUE = float('inf')
 
-KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
+# `KnownBounds` is imported from `muzero` rather than redefined here. A second
+# `collections.namedtuple('KnownBounds', ...)` call builds a *different* class,
+# so `MuZeroConfig.known_bounds` was not assignable to `MinMaxStats.__init__`
+# even though the two were structurally identical.
+
+# Gumbel sequential-halving constants, from the Gumbel MuZero paper. These sat
+# ~360 lines down, immediately above the one function that reads them, which is
+# not where anyone looks for a tunable.
+C_VISIT = 50.0
+C_SCALE = 1.0
 
 
 def to_scalar(value) -> float:
@@ -42,29 +52,6 @@ class MinMaxStats(object):
       return (value - self.minimum) / (self.maximum - self.minimum)
     return value
     
-
-class ActionHistory(object):
-  """Simple history container used inside the search.
-
-  Only used to keep track of the actions executed.
-  """
-
-  def __init__(self, history: List[int], action_space_size: int):
-    self.history = list(history)
-    self.action_space_size = action_space_size
-
-  def clone(self):
-    return ActionHistory(self.history, self.action_space_size)
-
-  def add_action(self, action: int):
-    self.history.append(action)
-
-  def last_action(self) -> int:
-    return self.history[-1]
-
-  def action_space(self) -> List[int]:
-    return [int(i) for i in range(self.action_space_size)]
-  
 
 class Node(object):
   
@@ -362,9 +349,6 @@ def _simulate(config, root, action_history, network, min_max_stats, model,
 # target is softmax(logits + sigma(completed Q)), which is defined for every
 # action rather than only the ones that happened to be visited.
 
-C_VISIT = 50.0
-C_SCALE = 1.0
-
 
 def _sigma(q_value: float, max_visit_count: int) -> float:
     """Monotone transform applied to Q before it is added to the logits."""
@@ -433,7 +417,39 @@ def run_gumbel_mcts(config, root: Node, action_history: ActionHistory, network, 
     # Top-m sampling without replacement is exactly argsort(gumbel + logit).
     considered = sorted(actions, key=lambda a: gumbel[a] + logits[a], reverse=True)[:num_considered]
 
+    remaining = _sequential_halving(
+        config, root, action_history, network, min_max_stats, model,
+        considered, gumbel, logits,
+    )
+
+    max_visit_count = max(
+        (child.visit_count for child in root.children.values()), default=0
+    )
+
+    chosen = max(
+        remaining,
+        key=lambda a: gumbel[a] + logits[a] + _sigma(
+            _normalised_q(config, root.children[a], min_max_stats), max_visit_count),
+    )
+
+    if model is not None:
+        model.restore_root()
+
+    improved_policy = _improved_policy(
+        config, root, min_max_stats, logits, actions, max_visit_count)
+
+    return chosen, improved_policy
+
+
+def _sequential_halving(config, root, action_history, network, min_max_stats, model,
+                        considered, gumbel, logits):
+    """Run the simulation budget over `considered`, halving the survivors each phase.
+
+    Returns the surviving actions, best first.
+    """
+
     simulations_left = config.num_simulations
+    num_considered = len(considered)
     num_phases = max(1, int(math.ceil(math.log2(num_considered)))) if num_considered > 1 else 1
 
     remaining = list(considered)
@@ -477,21 +493,15 @@ def run_gumbel_mcts(config, root: Node, action_history: ActionHistory, network, 
                   model, forced_first_action=remaining[0])
         simulations_left -= 1
 
-    max_visit_count = max(
-        (child.visit_count for child in root.children.values()), default=0
-    )
+    return remaining
 
-    chosen = max(
-        remaining,
-        key=lambda a: gumbel[a] + logits[a] + _sigma(
-            _normalised_q(config, root.children[a], min_max_stats), max_visit_count),
-    )
 
-    # Improved policy target: softmax(logit + sigma(completed Q)) over legal
-    # actions. Unlike visit fractions this is well defined for every action, not
-    # only for the handful the search had budget to touch.
-    if model is not None:
-        model.restore_root()
+def _improved_policy(config, root, min_max_stats, logits, actions, max_visit_count):
+    """Policy training target: softmax(logit + sigma(completed Q)) over legal actions.
+
+    Unlike visit fractions this is well defined for every action, not only for
+    the handful the search had budget to touch.
+    """
 
     completed_q = _completed_q_values(config, root, min_max_stats)
     scores = {a: logits[a] + _sigma(completed_q[a], max_visit_count) for a in actions}
@@ -504,7 +514,7 @@ def run_gumbel_mcts(config, root: Node, action_history: ActionHistory, network, 
     for action, value in exponentiated.items():
         improved_policy[action] = value / total
 
-    return chosen, improved_policy
+    return improved_policy
 
 
 ######### End Self-Play ##########

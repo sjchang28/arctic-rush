@@ -1,29 +1,32 @@
 [project]
 name = "arctic-rush"
-version = "0.1.0"
+version = "0.0.1"
 description = "Arctic Rush MuZero/MCTS training"
 requires-python = ">=3.13"
 dependencies = [
     "pygame>=2.6.1",
     "numpy>=2.3.0",
-    "tqdm>=4.67.1",
     "torch>=2.12.1,<2.13.0",
     "torchvision>=0.27.1,<0.28.0",
-    "gym>=0.26.2",
     "matplotlib>=3.10.1",
     "tensorboard>=2.19.0",
-    "stable-baselines3>=2.7.0",
     "gymnasium>=1.2.0",
-    "pandas>=2.3.0",
-    "opencv-python>=4.11.0.86",
-    "psutil>=7.0.0",
-    "rich>=14.0.0",
-    "ale-py>=0.11.0",
-    "farama-notifications>=0.0.4",
     "pydantic>=2.9.0",
     "pydantic-settings>=2.5.0",
     "loguru>=0.7.2",
+    # Log timestamps resolve "America/New_York" through zoneinfo, which has no
+    # system tz database to fall back on under Windows.
+    "tzdata>=2025.1",
 ]
+
+# Removed as unimported residue from an earlier RL scaffold: gym (superseded by
+# gymnasium, which is what `src/game/env.py` actually imports -- having both
+# installed is a known source of registry confusion), stable-baselines3,
+# ale-py, opencv-python, pandas, farama-notifications, psutil, rich, tqdm.
+#
+# torchvision is also unimported but kept deliberately: it is pinned to the same
+# CUDA wheel index as torch below, and dropping it would change what that index
+# resolves.
 
 [tool.uv]
 package = false
@@ -40,6 +43,8 @@ torchvision = { index = "pytorch-cu126" }
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pyrefly>=1.2.0",
+    "ruff>=0.14.0",
 ]
 
 [tool.pytest.ini_options]
@@ -47,3 +52,34 @@ dev = [
 # root -- not `src/` -- is what has to be importable.
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "slow: end-to-end learning tests; minutes, not seconds. Deselect with -m 'not slow'.",
+]
+
+[tool.pyrefly]
+# Modules import each other as `src.*`, so the import root is the repository
+# root, not `src/`. Without this, pyrefly infers a src-layout and every
+# intra-project import fails as `missing-import`.
+search-path = ["."]
+project-includes = ["src", "tests", "scripts"]
+python-version = "3.13"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+# Deliberately narrow. `F` (pyflakes) earns its place by catching undefined
+# names and dead imports. Note it did *not* flag the `robots` bug in `game.py`
+# while that name was also bound at module scope inside `if __name__ ==
+# "__main__"` -- pyflakes saw a legitimate global. Deleting that binding is what
+# puts the bug class under F821 and stops it coming back. `I` keeps import
+# blocks ordered, which matters while modules are being split apart. Formatting
+# opinions are left off on purpose -- reflowing the whole codebase would bury
+# real changes in diff noise.
+select = ["F", "I", "E9"]
+
+[tool.ruff.lint.per-file-ignores]
+# Environment variables must be set before `src.*` is imported; see the module
+# docstring. The import-not-at-top warning is the intended shape here.
+"tests/conftest.py" = ["E402"]

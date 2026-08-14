@@ -1,4 +1,4 @@
-﻿"""Exact shortest-solution search over the real simulator.
+"""Exact shortest-solution search over the real simulator.
 
 Ricochet Robots is deterministic and fully observable and a whole position is
 four robot coordinates, so breadth-first search returns the true optimal move
@@ -21,9 +21,8 @@ almost immediately, while genuinely deep ones exhaust the budget and report
 
 from collections import deque
 
-from src.config import ALL_DIRECTIONS
+from src.game.config import ALL_DIRECTIONS
 from src.game.robots import Robot
-
 
 #: Returned when the node budget ran out before the search finished. It is *not*
 #: the same as "no solution": the search simply stopped looking, so the position

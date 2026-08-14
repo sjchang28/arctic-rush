@@ -1,4 +1,4 @@
-﻿"""Exact-solver and curriculum-difficulty tests.
+"""Exact-solver and curriculum-difficulty tests.
 
 These pin the failure the reverse curriculum had in its first form: scramble
 depth is only an upper bound on true difficulty, so the generator produced
@@ -12,16 +12,8 @@ import random
 import numpy as np
 import pytest
 
-from src.config import settings
-from src.game.env import RicochetRobotsEnv
+from src.game.config import CURRICULUM_MIN_DEPTH_RATIO
 from src.game.solver import SEARCH_EXHAUSTED, shortest_solution_length
-
-
-@pytest.fixture
-def env():
-    e = RicochetRobotsEnv(render_ai=False)
-    yield e
-    e.close()
 
 
 def _optimal(env, max_depth=8, node_budget=30_000):
@@ -60,7 +52,7 @@ def test_solver_agrees_with_the_environment(env, monkeypatch):
     require it to terminate in exactly that many moves.
     """
 
-    monkeypatch.setattr(settings, "CURRICULUM_START_MOVES", 2)
+    monkeypatch.setattr("src.game.env.CURRICULUM_START_MOVES", 2)
     env.set_curriculum_moves(2)
 
     # Replaying through the environment is exponential, so this needs a shallow
@@ -104,8 +96,8 @@ def test_forward_walk_responds_to_its_length(env, monkeypatch):
     depends on that, so it is asserted rather than assumed.
     """
 
-    monkeypatch.setattr(settings, "CURRICULUM_WALK_MIN", 0)
-    monkeypatch.setattr(settings, "CURRICULUM_WALK_MAX", 512)
+    monkeypatch.setattr("src.game.curriculum.CURRICULUM_WALK_MIN", 0)
+    monkeypatch.setattr("src.game.curriculum.CURRICULUM_WALK_MAX", 512)
 
     target = env.game.target_deck.current_target
     matching = [i for i, r in enumerate(env.robots)
@@ -113,11 +105,11 @@ def test_forward_walk_responds_to_its_length(env, monkeypatch):
     solver_index = matching[0]
 
     def mean_depth(steps, trials=20):
-        monkeypatch.setattr(settings, "CURRICULUM_WALK_PER_DEPTH", steps)
+        monkeypatch.setattr("src.game.curriculum.CURRICULUM_WALK_PER_DEPTH", steps)
         env.set_curriculum_moves(1)  # walk length becomes `steps * 1`
         depths = []
         for _ in range(trials):
-            env._forward_walk_once(target, solver_index)
+            env.curriculum.forward_walk_once(target, solver_index)
             depth = _optimal(env, max_depth=8)
             depths.append(8 if depth in (None, SEARCH_EXHAUSTED) else depth)
         return float(np.mean(depths))
@@ -135,9 +127,9 @@ def test_curriculum_generates_positions_near_the_requested_depth(env, monkeypatc
     straight to the ceiling in ten consecutive windows.
     """
 
-    monkeypatch.setattr(settings, "CURRICULUM_VERIFY_DEPTH", True)
-    monkeypatch.setattr(settings, "CURRICULUM_SCRAMBLE_ATTEMPTS", 4)
-    monkeypatch.setattr(settings, "SOLVER_NODE_BUDGET", 15_000)
+    monkeypatch.setattr("src.game.curriculum.CURRICULUM_VERIFY_DEPTH", True)
+    monkeypatch.setattr("src.game.curriculum.CURRICULUM_SCRAMBLE_ATTEMPTS", 4)
+    monkeypatch.setattr("src.game.env.SOLVER_NODE_BUDGET", 15_000)
 
     env.set_curriculum_moves(requested)
 
@@ -152,7 +144,7 @@ def test_curriculum_generates_positions_near_the_requested_depth(env, monkeypatc
     assert depths, f"level {requested} verified nothing at all"
 
     mean_depth = float(np.mean(depths))
-    assert mean_depth >= settings.CURRICULUM_MIN_DEPTH_RATIO * requested, (
+    assert mean_depth >= CURRICULUM_MIN_DEPTH_RATIO * requested, (
         f"level {requested} produced positions averaging {mean_depth:.1f} "
         f"optimal moves: {depths}"
     )
@@ -175,9 +167,7 @@ def test_reverse_scramble_is_a_shallow_generator(env):
     depths = []
 
     for _ in range(16):
-        env.game.robot_manager._initialize_robot_positions(
-            force=True, forbidden_extra={(target.x, target.y)}
-        )
+        env.place_robots_randomly(forbidden_extra={(target.x, target.y)})
         env.robots[solver_index].x, env.robots[solver_index].y = target.x, target.y
         for robot in env.robots:
             robot.prev_x, robot.prev_y = robot.x, robot.y
@@ -201,7 +191,7 @@ def test_reverse_scramble_is_a_shallow_generator(env):
     )
 
 
-def test_curriculum_holds_when_positions_are_too_shallow(monkeypatch):
+def test_curriculum_holds_when_positions_are_too_shallow(monkeypatch, fake_config):
     """Promotion must refuse a level whose generated positions are trivial.
 
     Previously the gate saw only the solved rate, so it promoted on every window
@@ -210,20 +200,15 @@ def test_curriculum_holds_when_positions_are_too_shallow(monkeypatch):
     """
 
     import collections
-    from core.train import maybe_promote_curriculum
 
-    monkeypatch.setattr(settings, "CURRICULUM_PROMOTE_WINDOW", 10)
-    monkeypatch.setattr(settings, "CURRICULUM_PROMOTE_THRESHOLD", 0.75)
-    monkeypatch.setattr(settings, "CURRICULUM_MIN_DEPTH_RATIO", 0.75)
-    monkeypatch.setattr(settings, "CURRICULUM_MAX_MOVES", 12)
+    from src.model.promotion import maybe_promote_curriculum
 
-    class FakeConfig:
-        curriculum_moves = 8
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_PROMOTE_WINDOW", 10)
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_PROMOTE_THRESHOLD", 0.75)
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_MIN_DEPTH_RATIO", 0.75)
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_MAX_MOVES", 12)
 
-        def set_curriculum_moves(self, moves):
-            self.curriculum_moves = moves
-
-    config = FakeConfig()
+    config = fake_config
     solved = collections.deque([1.0] * 10, maxlen=100)
 
     shallow = collections.deque([1] * 10, maxlen=100)
@@ -235,7 +220,7 @@ def test_curriculum_holds_when_positions_are_too_shallow(monkeypatch):
     assert config.curriculum_moves == 9
 
 
-def test_promotion_holds_when_depth_could_not_be_verified(monkeypatch):
+def test_promotion_holds_when_depth_could_not_be_verified(monkeypatch, fake_config):
     """Unmeasured is not the same as hard.
 
     Past a certain depth the solver gives up rather than concluding. Promoting on
@@ -244,20 +229,15 @@ def test_promotion_holds_when_depth_could_not_be_verified(monkeypatch):
     """
 
     import collections
-    from core.train import maybe_promote_curriculum
 
-    monkeypatch.setattr(settings, "CURRICULUM_VERIFY_DEPTH", True)
-    monkeypatch.setattr(settings, "CURRICULUM_PROMOTE_WINDOW", 10)
-    monkeypatch.setattr(settings, "CURRICULUM_PROMOTE_THRESHOLD", 0.75)
-    monkeypatch.setattr(settings, "CURRICULUM_MAX_MOVES", 12)
+    from src.model.promotion import maybe_promote_curriculum
 
-    class FakeConfig:
-        curriculum_moves = 8
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_VERIFY_DEPTH", True)
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_PROMOTE_WINDOW", 10)
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_PROMOTE_THRESHOLD", 0.75)
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_MAX_MOVES", 12)
 
-        def set_curriculum_moves(self, moves):
-            self.curriculum_moves = moves
-
-    config = FakeConfig()
+    config = fake_config
     solved = collections.deque([1.0] * 10, maxlen=100)
 
     # Only two of ten episodes carried a verified depth.
@@ -274,11 +254,11 @@ def test_verified_positions_are_pooled_and_reused(env, monkeypatch):
     exists to shape.
     """
 
-    monkeypatch.setattr(settings, "CURRICULUM_VERIFY_DEPTH", True)
-    monkeypatch.setattr(settings, "CURRICULUM_SCRAMBLE_ATTEMPTS", 4)
-    monkeypatch.setattr(settings, "SOLVER_NODE_BUDGET", 15_000)
-    monkeypatch.setattr(settings, "CURRICULUM_POOL_MIN", 2)
-    monkeypatch.setattr(settings, "CURRICULUM_POOL_REFRESH", 0.15)
+    monkeypatch.setattr("src.game.curriculum.CURRICULUM_VERIFY_DEPTH", True)
+    monkeypatch.setattr("src.game.curriculum.CURRICULUM_SCRAMBLE_ATTEMPTS", 4)
+    monkeypatch.setattr("src.game.env.SOLVER_NODE_BUDGET", 15_000)
+    monkeypatch.setattr("src.game.curriculum.CURRICULUM_POOL_MIN", 2)
+    monkeypatch.setattr("src.game.curriculum.CURRICULUM_POOL_REFRESH", 0.15)
 
     # Only exact matches are pooled, and the generators hit an exact depth well
     # under half the time, so the count is not the assertion -- the labels are.
@@ -288,11 +268,11 @@ def test_verified_positions_are_pooled_and_reused(env, monkeypatch):
     for _ in range(25):
         env.reset()
 
-    pool = env._depth_pool.get(requested)
+    pool = env.curriculum.depth_pool.get(requested)
     assert pool and len(pool) >= 2
 
     # Every pooled entry must genuinely be the depth it is filed under, target
     # included -- difficulty belongs to the pair, not to the robots alone.
     for entry in list(pool)[:6]:
-        env._apply_pooled(entry)
+        env.curriculum.apply_pooled(entry)
         assert _optimal(env, max_depth=requested + 1) == requested

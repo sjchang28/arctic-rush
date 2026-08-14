@@ -1,4 +1,4 @@
-﻿"""Environment-semantics tests.
+"""Environment-semantics tests.
 
 Each test here pins a bug that made learning impossible before the Phase 1
 correctness pass; they fail against the pre-fix environment.
@@ -7,16 +7,9 @@ correctness pass; they fail against the pre-fix environment.
 import numpy as np
 import pytest
 
-from src.config import AI_ACTION_SPACE_SIZE, INT2DIRECTION, NUMBER_OF_DIRECTIONS
-from src.core.state import action_to_index, index_to_action
-from src.game.env import RicochetRobotsEnv
-
-
-@pytest.fixture
-def env():
-    e = RicochetRobotsEnv(render_ai=False)
-    yield e
-    e.close()
+from src.game.config import INT2DIRECTION, NUMBER_OF_DIRECTIONS
+from src.model.config import AI_ACTION_SPACE_SIZE
+from src.model.state import action_to_index, index_to_action
 
 
 def _place(env, positions):

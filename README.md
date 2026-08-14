@@ -1,32 +1,64 @@
-?# Arctic Rush
+# Arctic Rush
 
 MuZero-family agent for Ricochet Robots.
+
+## Layout
+
+```
+src/
+  config.py       `Settings` -- the env-overridable per-run knobs, and nothing
+                  else
+  core/           infrastructure: boot banner, logging
+  game/           the game itself: board, robots, targets, pygame renderer,
+                  the RL environment and the exact BFS solver
+  model/          the learner: network, MCTS, MuZero config, training loop
+tests/            unit, search and learning tests
+scripts/          local run helpers
+k8s/              job template, PVC and namespace for cluster runs
+data/             per-`RUN_ID` checkpoints and logs (gitignored, volume-mounted)
+assets/           screenshots and fonts
+```
+
+Each package owns the values it defines — the board and its colours in
+`src/game/config.py`, the action space, network shape and curriculum in
+`src/model/config.py`. Only what a deployment actually varies is an
+env-overridable setting; see [Key settings](#key-settings).
 
 ## Running
 
 ```bash
-python -m src.core.train          # train
-python -m tests.test          # play one episode with a checkpoint, rendered
+python -m src.model.train          # train
+python -m scripts.play_model  # play one episode with a checkpoint, rendered
 python -m pytest tests -q     # unit + learning tests
 ```
 
-Everything is configured through environment variables (or a `.env` file) read by
+Per-run configuration comes from environment variables (or a `.env` file) read by
 `Settings` in `src/config.py`, so parallel Docker / k8s runs do not collide. Set
 `RUN_ID` per run: checkpoints, logs and TensorBoard scalars are all namespaced by it.
 
 ```bash
-RUN_ID=my_run CURRICULUM_START_MOVES=2 TRAIN_STEPS_PER_EPISODE=100 python -m src.core.train
+RUN_ID=my_run SEARCH_MODE=muzero TRAIN_STEPS_PER_EPISODE=100 python -m src.model.train
 tensorboard --logdir data/logs
 ```
 
 ### Docker
 
-`docker compose up -d` runs both search modes side by side on the GPU, writing to
+`docker compose up -d` runs the `train-alphazero` service on the GPU, writing to
 `./data/models/<RUN_ID>` and `./data/logs/<RUN_ID>`:
 
 ```bash
 docker compose up -d --build
-docker compose logs -f train-muzero
+docker compose logs -f train-alphazero
+tensorboard --logdir data/logs
+```
+
+There is one service, not one per search mode. `SEARCH_MODE` is read from the
+environment inside the container, so a second mode is a second `run` against the
+same service rather than a second service — give it its own `RUN_ID` so the two
+do not share checkpoints:
+
+```bash
+docker compose run -d -e RUN_ID=muzero -e SEARCH_MODE=muzero train-alphazero
 tensorboard --logdir data/logs        # both runs, side by side
 ```
 
@@ -49,37 +81,47 @@ same episode budget under each answers "how much of the difficulty is MuZero?"
 
 ## Key settings
 
-[`src/config.py`](src/config.py) is the **single source of truth** for run configuration.
-Defaults there are the run you get; nothing restates them elsewhere.
-`docker-compose.yaml` sets only `RUN_ID` and the GPU wiring, and the `Dockerfile`
-sets only the container paths (`MODEL_DIR`, `LOG_DIR`). Every setting is still
-env-overridable for sweeps — but an override that duplicates a default is how
-the file you read stops describing the run you got.
+Configuration is split by what changes and what does not.
+
+[`src/config.py`](src/config.py) holds the **env-overridable run knobs** -- what
+a deployment sets. `docker-compose.yaml` sets only `RUN_ID` and the GPU wiring,
+and the `Dockerfile` sets only the container paths (`MODEL_DIR`, `LOG_DIR`); an
+override that duplicates a default is how the file you read stops describing the
+run you got.
 
 | Setting | Default | Notes |
 |---|---|---|
+| `RUN_ID` | `local` | namespaces checkpoints, logs and TensorBoard scalars |
+| `MODEL_DIR` / `LOG_DIR` | `data/models`, `data/logs` | volume-mounted in Docker/k8s |
 | `TRAINING_EPISODES` | 4000 | self-play episodes; the training loop bound |
 | `TRAIN_STEPS_PER_EPISODE` | 40 | gradient steps per self-play episode |
 | `TOTAL_MCTS_EPISODES` | 50 | simulations per move |
-| `MAX_TOTAL_MOVES_PER_GAME` | 25 | move cap per episode |
-| `USE_GUMBEL` | true | Gumbel root search; guarantees policy improvement at small budgets |
-| `GUMBEL_NUM_CONSIDERED` | 16 | root actions entering sequential halving |
+| `NUM_ACTORS` | 1 | parallel self-play actors |
+| `SEARCH_MODE` | `alphazero` | see above |
 | `REANALYSE_FRACTION` | 0.0 | off: it re-searches with the learned model, which `alphazero` does not plan with |
-| `CONSISTENCY_LOSS_WEIGHT` | 2.0 | EfficientZero self-supervised consistency loss |
-| `LSTM_HORIZON_LEN` | 5 | steps the value-prefix LSTM accumulates before its state resets |
-| `VALUE_PREFIX_DIM` | 128 | width of the value-prefix LSTM |
-| `USE_HER` / `HER_FRACTION` | true / 0.5 | hindsight relabelling of failed episodes |
-| `CURRICULUM_START_MOVES` | 1 | curriculum depth as an *optimal* solution length; 0 = fully random starts |
-| `CURRICULUM_MAX_MOVES` | 15 | deepest level the ramp will try for |
-| `CURRICULUM_VERIFY_DEPTH` | true | solve every generated position exactly before using it |
-| `CURRICULUM_POOL_SIZE` / `_MIN` / `_REFRESH` | 256 / 24 / 0.15 | reuse of verified positions |
-| `SOLVER_MAX_DEPTH` / `SOLVER_NODE_BUDGET` | 16 / 15000 | BFS reach, and expansions before it reports "unknown" |
 | `SAVE_BEST_ONLY` | true | overwrite weights only on improvement |
 | `CHECKPOINT_WARMUP_EPISODES` | 20 | episodes saved unconditionally at the start |
-| `NUM_CHANNELS` / `NUM_BLOCKS` | 64 / 4 | residual trunk size |
-| `VALUE_SUPPORT_SIZE` | 10 | categorical value/reward support spans `[-10, 10]` transformed |
-| `NUM_UNROLL_STEPS` | 5 | dominates training VRAM |
-| `SEARCH_MODE` | `alphazero` | see above |
+
+Everything else is a **constant in the package that owns it**, because it is a
+property of the task or the model rather than of a run. Changing one is changing
+the experiment, not configuring it -- the architecture values are baked into the
+checkpoint, so a run that alters them cannot resume from existing weights.
+
+[`src/model/config.py`](src/model/config.py) — action space, observation planes
+and reward scale (`AI_*`, `REWARD_*`, `MAX_TOTAL_MOVES_PER_GAME`); architecture
+(`NUM_CHANNELS` 64, `NUM_BLOCKS` 4, `VALUE_SUPPORT_SIZE` 10, `VALUE_PREFIX_DIM`
+128, `LSTM_HORIZON_LEN` 5); unroll and replay (`NUM_UNROLL_STEPS` 5, `TD_STEPS`
+10, `REPLAY_WINDOW_SIZE` 100, `MIN_REPLAY_GAMES` 4); search shaping
+(`USE_GUMBEL`, `GUMBEL_NUM_CONSIDERED` 16); losses and sampling
+(`CONSISTENCY_LOSS_WEIGHT` 2.0, `USE_HER` / `HER_FRACTION`, prioritised-replay
+exponents); and the curriculum and BFS solver (`CURRICULUM_*`, `SOLVER_MAX_DEPTH`
+16, `SOLVER_NODE_BUDGET` 15000).
+
+[`src/game/config.py`](src/game/config.py) — the board itself: level file, 16x16
+geometry, robot colours, directions, and the pygame tile/screen sizes.
+
+[`src/core/config.py`](src/core/config.py) — boot banner and console logging
+cadence.
 
 ### Checkpointing
 
@@ -108,9 +150,9 @@ moments from zero and is not equivalent to an uninterrupted one.
 
 ### Curriculum
 
-`CURRICULUM_START_MOVES=N` generates start positions whose **optimal** solution
-is `N` moves, and the level deepens once the agent solves 75% of a 30-episode
-window. On a sparse-reward puzzle this is what gives the value network a gradient
+`CURRICULUM_START_MOVES = N` (in `src/model/config.py`) generates start positions
+whose **optimal** solution is `N` moves, and the level deepens once the agent
+solves 75% of a 30-episode window. On a sparse-reward puzzle this is what gives the value network a gradient
 before forward exploration would ever reach a goal.
 
 `N` is a measured quantity, not a requested one. Positions are generated, solved

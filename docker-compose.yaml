@@ -1,4 +1,4 @@
-﻿# Deployment only. Every training knob lives in src/config.py -- it is the single
+# Deployment only. Per-run knobs live in src/config.py -- it is the single
 # source of truth, and it is env-overridable, so anything set here silently wins
 # over what that file says. Values were split across both once; the result was
 # that reading either one alone described a run nobody was doing.

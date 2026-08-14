@@ -1,20 +1,48 @@
-?# Renders grid
+# Renders grid
 # Stores wall data
 
-import pygame
-import math
-import json, os, numpy as np
-from src.config import LEVEL_FILE, TILE_SIZE, BOARD_WIDTH, BOARD_HEIGHT, ROBOT_COLORS, GREY, BLACK, UP, DOWN, LEFT, RIGHT
-from src.core.logger import logger
+import json
+import os
 
-# Get absolute path to the level.json file
+import numpy as np
+import pygame
+
+from src.core.logger import logger
+from src.game.config import (
+    BLACK,
+    BOARD_HEIGHT,
+    BOARD_WIDTH,
+    DOWN,
+    GREY,
+    LEFT,
+    LEVEL_FILE,
+    RIGHT,
+    TILE_SIZE,
+    UP,
+)
+
 current_dir = os.path.dirname(__file__)
-level_file = os.path.join(current_dir, "levels", LEVEL_FILE)
+
+
+def default_level_file():
+    """Absolute path to the configured level.
+
+    Resolved on call rather than at import. As a default argument this was
+    evaluated once when the module first loaded, which froze `LEVEL_FILE` for the
+    life of the process and made the level impossible to change at runtime (or
+    from a test).
+    """
+
+    return os.path.join(current_dir, "levels", LEVEL_FILE)
+
 
 class BouncePadManager:
-    
-    def __init__(self, bounce_pad_file=level_file):
+
+    def __init__(self, bounce_pad_file=None):
         self.bounce_pads = dict()
+
+        if bounce_pad_file is None:
+            bounce_pad_file = default_level_file()
 
         self._load_bounce_pads(bounce_pad_file=bounce_pad_file)
         
@@ -89,8 +117,11 @@ class BouncePadManager:
     
 class Board:
     
-    def __init__(self, wall_file=level_file):
-        
+    def __init__(self, wall_file=None):
+
+        if wall_file is None:
+            wall_file = default_level_file()
+
         # Initialize a 2D grid with empty wall data for each tile
         # Each cell is a dict with {direction: True/False}
         self.walls = [[{UP: False, RIGHT: False, DOWN: False, LEFT: False}
@@ -98,8 +129,12 @@ class Board:
 
         self._add_border_walls()
         self._load_custom_walls(wall_file=wall_file)
-        
-        self.bounce_pad_manager = BouncePadManager()
+
+        # Walls and pads describe the same level and must come from the same
+        # file. Constructed with no argument, this silently read the module
+        # default instead, so Board(wall_file=X) mixed X's walls with the
+        # default level's pads.
+        self.bounce_pad_manager = BouncePadManager(wall_file)
     
     
     def flatten_walls(self):
@@ -146,18 +181,23 @@ class Board:
 
 
     def add_wall(self, row, col, direction):
-        
-        self.walls[row][col][direction] = True
+        """Raise a wall on one side of one cell.
 
-        # Mirror wall in adjacent cell
-        # if direction == UP and row > 0:
-        #     self.walls[row - 1][col][DOWN] = True
-        # elif direction == DOWN and row < BOARD_HEIGHT - 1:
-        #     self.walls[row + 1][col][UP] = True
-        # elif direction == LEFT and col > 0:
-        #     self.walls[row][col - 1][RIGHT] = True
-        # elif direction == RIGHT and col < BOARD_WIDTH - 1:
-        #     self.walls[row][col + 1][LEFT] = True
+        Deliberately does *not* mirror the wall into the neighbouring cell. A
+        commented-out mirroring block used to sit here, which read as an
+        unfinished feature -- as though walls were one-sided and robots could
+        slip through them from the far side.
+
+        They are not: every level file already lists both halves of every wall
+        (verified across all four levels -- 0 unpaired). Mirroring here would be
+        redundant, and re-enabling it would silently change the physics the
+        current checkpoints were trained against.
+
+        `tests/test_board.py` pins the level-data symmetry this relies on, since
+        it is now the only thing making walls two-sided.
+        """
+
+        self.walls[row][col][direction] = True
 
 
     def can_move(self, col, row, direction):

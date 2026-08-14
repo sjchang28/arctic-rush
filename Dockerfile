@@ -69,4 +69,4 @@ RUN mkdir -p /data/models /data/logs && \
 
 USER $USERNAME
 
-CMD ["python", "-m", "src.core.train"]
+CMD ["python", "-m", "src.model.train"]

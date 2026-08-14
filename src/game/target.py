@@ -1,16 +1,17 @@
-﻿# Tracks current target position and color
+# Tracks current target position and color
 # Handles win condition
 
-import json, os, numpy as np
-import pygame
+import json
+import os
 import random
 
-from src.config import LEVEL_FILE, TILE_SIZE, COLOR_MAP, ROBOT_COLORS, BLACK, GREY
-from src.core.logger import logger
+import numpy as np
+import pygame
 
-# Get absolute path to the level.json file
-current_dir = os.path.dirname(__file__)
-level_file = os.path.join(current_dir, "levels", LEVEL_FILE)
+from src.core.logger import logger
+from src.game.board import default_level_file
+from src.game.config import BLACK, COLOR_MAP, GREY, ROBOT_COLORS, TILE_SIZE
+
 
 class Target:
     
@@ -49,8 +50,11 @@ class Target:
 
 class TargetDeck:
     
-    def __init__(self, level_data=level_file):
-        
+    def __init__(self, level_data=None):
+
+        if level_data is None:
+            level_data = default_level_file()
+
         self.deck = []
         self.current_target = Target()
         self._load_custom_deck(level_data)

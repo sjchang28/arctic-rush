@@ -1,4 +1,4 @@
-﻿# Render with envsubst before applying, e.g.:
+# Render with envsubst before applying, e.g.:
 #   RUN_ID=variant-a envsubst '$RUN_ID' < k8s/job-template.yaml | kubectl apply -f -
 #
 # Repeat with a different RUN_ID per variant to run several training jobs

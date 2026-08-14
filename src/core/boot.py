@@ -1,4 +1,4 @@
-?"""Startup banner and readiness checklist.
+"""Terminal primitives for the startup banner and checklist.
 
 The banner used to be one `logger.info(ASCII_LEELA_BOT)` call: thirty lines
 landing at once behind a single timestamp, with a checklist baked into the art
@@ -8,13 +8,17 @@ run actually did -- device, weights, sizes -- after the network exists.
 
 Pacing only happens on a TTY. Under `docker logs` without `-t` there is nobody
 watching the frames, so the whole banner is written at full speed.
+
+This module draws rows; it does not know what a training run is. The checklist
+*content* lives in `src/model/reporting.py`, because describing a run means
+reading the learner's configuration -- and importing that here made `core`, the
+bottom layer, depend on `model`, the top one.
 """
 
-import os
 import sys
 import time
 
-from src.config import ASCII_LEELA_BOT, settings
+from src.core.config import ASCII_LEELA_BOT
 
 ART_LINE_DELAY = 0.03
 STEP_DELAY = 0.10
@@ -70,36 +74,11 @@ def boot_step(label: str, detail: str = "", ok: bool = True):
     _pause(STEP_DELAY)
 
 
-def report_ready(config, network, device):
-    """Checklist of what this run is actually configured to do.
+def boot_heading(text: str):
+    """A dim, unmarked line above a group of checklist rows."""
 
-    Called once the network exists so every line is a fact rather than a
-    promise: whether checkpoint weights were found, how big the model is, and
-    the knobs that decide how long the run takes.
-    """
+    _emit(text, DIM)
 
-    weights_path = os.path.join(settings.MODEL_DIR, settings.RUN_ID, settings.WEIGHTS_FILE_PATH)
-    resumed = os.path.exists(weights_path)
-    parameters = sum(p.numel() for p in network.parameters())
 
-    _emit(f"  Run {settings.RUN_ID}", DIM)
-
-    boot_step("Device", str(device).upper())
-    boot_step("Weights", f"resumed from {weights_path}" if resumed else "fresh initialisation")
-    boot_step("Checkpoint", "best only [by curriculum level, then solved rate]"
-                            if settings.SAVE_BEST_ONLY else "every episode")
-    boot_step("Network", f"{parameters/1e6:.2f}M parameters "
-                         f"[{settings.NUM_BLOCKS} blocks x {settings.NUM_CHANNELS} channels]")
-    boot_step("Search", f"{config.search_mode} [{config.num_simulations} simulations/move]")
-    actors = f"{config.num_actors} actor" + ("s" if config.num_actors != 1 else "")
-    boot_step("Self-play", f"{config.training_episodes} episodes x {actors} "
-                           f"[{settings.TRAIN_STEPS_PER_EPISODE} gradient steps/episode]")
-    verified = (f", BFS-verified x{settings.CURRICULUM_SCRAMBLE_ATTEMPTS}"
-                if settings.CURRICULUM_VERIFY_DEPTH else ", unverified depth")
-    boot_step("Curriculum", f"depth {config.curriculum_moves} -> {settings.CURRICULUM_MAX_MOVES}"
-                            f"{verified}"
-              if config.curriculum_moves > 0 else "disabled")
-    boot_step("Replay", f"window {config.window_size} games "
-                        f"[training starts at {settings.MIN_REPLAY_GAMES}]")
-
+def boot_blank():
     _emit()
