@@ -106,10 +106,10 @@ def test_forward_walk_responds_to_its_length(env, monkeypatch):
 
     def mean_depth(steps, trials=20):
         monkeypatch.setattr("src.game.curriculum.CURRICULUM_WALK_PER_DEPTH", steps)
-        env.set_curriculum_moves(1)  # walk length becomes `steps * 1`
         depths = []
         for _ in range(trials):
-            env.curriculum.forward_walk_once(target, solver_index)
+            # Depth 1, so the walk length is `steps * 1`.
+            env.curriculum.forward_walk_once(target, solver_index, 1)
             depth = _optimal(env, max_depth=8)
             depths.append(8 if depth in (None, SEARCH_EXHAUSTED) else depth)
         return float(np.mean(depths))
@@ -276,3 +276,177 @@ def test_verified_positions_are_pooled_and_reused(env, monkeypatch):
     for entry in list(pool)[:6]:
         env.curriculum.apply_pooled(entry)
         assert _optimal(env, max_depth=requested + 1) == requested
+
+
+# ---------------------------------------------------------------------------
+# Promotion cadence, demotion, and rehearsal of mastered depths.
+#
+# These pin the second failure the curriculum had, found in the runs to
+# 2026-08-17: the gate promoted on variance rather than competence, the ramp had
+# no way back down once it did, and the level it left stopped being generated at
+# all and was trained away.
+# ---------------------------------------------------------------------------
+
+
+def _gate(monkeypatch, window=10, promote=0.85, demote=0.35, start=1, maximum=12):
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_PROMOTE_WINDOW", window)
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_PROMOTE_THRESHOLD", promote)
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_DEMOTE_THRESHOLD", demote)
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_START_MOVES", start)
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_MAX_MOVES", maximum)
+    monkeypatch.setattr("src.model.promotion.CURRICULUM_MIN_DEPTH_RATIO", 0.75)
+
+
+def test_promotion_is_decided_once_per_window(monkeypatch, fake_config):
+    """The bug: read after every episode, a trailing window is not a measurement.
+
+    It asks whether *any* window has ever crossed the bar, re-rolled every
+    episode, which a marginal agent clears on variance alone. Every promotion
+    past depth 3 in the 2026-08-17 runs fired at exactly the minimum passing
+    count -- never with margin.
+    """
+
+    import collections
+
+    from src.model.promotion import maybe_promote_curriculum
+
+    _gate(monkeypatch, window=10)
+
+    config = fake_config
+    solved = collections.deque([1.0] * 10, maxlen=100)
+    depths = collections.deque([8] * 10, maxlen=100)
+
+    # A passing window, but not on the cadence: no decision is taken.
+    for episode in (11, 15, 19):
+        assert not maybe_promote_curriculum(config, solved, depths, episode)
+        assert config.curriculum_moves == 8
+
+    assert maybe_promote_curriculum(config, solved, depths, episode=20)
+    assert config.curriculum_moves == 9
+
+
+def test_a_failing_level_demotes(monkeypatch, fake_config):
+    """Promotion used to be one-way, so a level entered too early was permanent.
+
+    The 2026-08-17 runs promoted to depth 5 on a marginal window, collapsed to
+    20-40%, and stayed there for their remaining ~1400 episodes.
+    """
+
+    import collections
+
+    from src.model.promotion import maybe_promote_curriculum
+
+    _gate(monkeypatch, window=10)
+
+    config = fake_config
+    solved = collections.deque([1.0] * 2 + [0.0] * 8, maxlen=100)
+    depths = collections.deque([8] * 10, maxlen=100)
+
+    assert maybe_promote_curriculum(config, solved, depths, episode=20)
+    assert config.curriculum_moves == 7
+
+    # The window described the level just left, so it must not carry over.
+    assert not solved and not depths
+
+
+def test_demotion_stops_at_the_starting_depth(monkeypatch, fake_config):
+    import collections
+
+    from src.model.promotion import maybe_promote_curriculum
+
+    _gate(monkeypatch, window=10, start=1)
+
+    config = fake_config
+    config.set_curriculum_moves(1)
+
+    solved = collections.deque([0.0] * 10, maxlen=100)
+    depths = collections.deque([1] * 10, maxlen=100)
+
+    assert not maybe_promote_curriculum(config, solved, depths, episode=20)
+    assert config.curriculum_moves == 1
+
+
+def test_the_two_thresholds_leave_a_band_that_holds(monkeypatch, fake_config):
+    """Hysteresis. With the thresholds close together a level sitting between
+    them would promote, fail, demote and promote again indefinitely."""
+
+    import collections
+
+    from src.model.promotion import maybe_promote_curriculum
+
+    _gate(monkeypatch, window=10, promote=0.85, demote=0.35)
+
+    config = fake_config
+    solved = collections.deque([1.0] * 6 + [0.0] * 4, maxlen=100)  # 60%
+    depths = collections.deque([8] * 10, maxlen=100)
+
+    assert not maybe_promote_curriculum(config, solved, depths, episode=20)
+    assert config.curriculum_moves == 8
+    # Held, not reset: the window is still describing the level being played.
+    assert len(solved) == 10
+
+
+def test_a_depth_is_rehearsed_once_it_is_mastered(env, monkeypatch):
+    """Positions are generated only at the current level, and the replay buffer
+    holds 100 games, so within 100 episodes of a promotion no example of the
+    previous level survives anywhere and the network trains it away."""
+
+    monkeypatch.setattr("src.game.env.CURRICULUM_MASTERY_WINDOW", 4)
+    monkeypatch.setattr("src.game.env.CURRICULUM_MASTERY_THRESHOLD", 0.95)
+
+    env.set_curriculum_moves(6)
+
+    # Nothing established yet, so there is nothing worth rehearsing.
+    assert env.mastered_depths() == []
+
+    for _ in range(4):
+        env.record_result(2, solved=True)
+    assert env.mastered_depths() == [2]
+
+    # A depth it is merely decent at is not mastered.
+    for solved in (True, True, True, False):
+        env.record_result(3, solved=solved)
+    assert env.mastered_depths() == [2]
+
+    # ...and the current level is not something to rehearse against itself.
+    for _ in range(4):
+        env.record_result(6, solved=True)
+    assert env.mastered_depths() == [2]
+
+
+def test_mastery_is_sticky_so_a_slipping_depth_can_recover(env, monkeypatch):
+    """A depth dropped for slipping would never be practised again, so it could
+    never recover -- which is the forgetting this exists to prevent."""
+
+    monkeypatch.setattr("src.game.env.CURRICULUM_MASTERY_WINDOW", 4)
+    monkeypatch.setattr("src.game.env.CURRICULUM_MASTERY_THRESHOLD", 0.95)
+
+    env.set_curriculum_moves(6)
+
+    for _ in range(4):
+        env.record_result(2, solved=True)
+    assert env.mastered_depths() == [2]
+
+    for _ in range(4):
+        env.record_result(2, solved=False)
+    assert env.mastered_depths() == [2]
+
+
+def test_rehearsal_depths_are_drawn_from_the_mastered_set(env, monkeypatch):
+    monkeypatch.setattr("src.game.env.CURRICULUM_MASTERY_WINDOW", 4)
+    monkeypatch.setattr("src.game.env.CURRICULUM_REHEARSAL_RATE", 1.0)
+
+    env.set_curriculum_moves(6)
+
+    # Nothing mastered: rehearsal has nothing to draw from and falls through to
+    # the current level rather than inventing one.
+    assert env._next_start_depth() == 6
+
+    for depth in (1, 2):
+        for _ in range(4):
+            env.record_result(depth, solved=True)
+
+    assert {env._next_start_depth() for _ in range(40)} <= {1, 2}
+
+    monkeypatch.setattr("src.game.env.CURRICULUM_REHEARSAL_RATE", 0.0)
+    assert env._next_start_depth() == 6

@@ -1,4 +1,7 @@
 
+import collections
+import random
+
 import gymnasium
 import numpy as np
 from gymnasium import spaces
@@ -8,6 +11,9 @@ from src.game.config import (
     BOARD_HEIGHT,
     BOARD_WIDTH,
     COLOR_MAP,
+    CURRICULUM_MASTERY_THRESHOLD,
+    CURRICULUM_MASTERY_WINDOW,
+    CURRICULUM_REHEARSAL_RATE,
     CURRICULUM_START_MOVES,
     INT2DIRECTION,
     NUMBER_OF_DIRECTIONS,
@@ -108,6 +114,16 @@ class RicochetRobotsEnv(gymnasium.Env):
         # disabled). This -- not the scramble depth -- is the honest difficulty.
         self.last_optimal_depth = None
 
+        # Whether the episode started from a rehearsed depth rather than the
+        # current level. Those episodes are practice, and the promotion gate must
+        # not read them as evidence about the level it is assessing.
+        self.last_was_rehearsal = False
+
+        # Per-depth recent results, and the depths whose rate has ever cleared
+        # CURRICULUM_MASTERY_THRESHOLD. The second is what gets rehearsed.
+        self._depth_results = {}
+        self._mastered_depths = set()
+
         # Start-position generation, including its verified-position pool.
         self.curriculum = CurriculumGenerator(self)
 
@@ -157,6 +173,61 @@ class RicochetRobotsEnv(gymnasium.Env):
         self.curriculum_moves = max(0, int(moves))
 
 
+    def record_result(self, depth, solved: bool):
+
+        """Log the outcome of an episode played at `depth`.
+
+        Both assessment and rehearsal episodes are recorded, each against the
+        depth it was actually played at. Rehearsals keep a mastered depth's rate
+        current -- without them the record would freeze at the moment the ramp
+        left that level and never say anything again.
+        """
+
+        if depth is None or depth <= 0:
+            return
+
+        results = self._depth_results.setdefault(
+            depth, collections.deque(maxlen=CURRICULUM_MASTERY_WINDOW))
+        results.append(1.0 if solved else 0.0)
+
+        if len(results) < CURRICULUM_MASTERY_WINDOW:
+            return
+
+        rate = sum(results) / len(results)
+        if rate >= CURRICULUM_MASTERY_THRESHOLD:
+            self._mastered_depths.add(depth)
+
+
+    def mastered_depths(self):
+
+        """Depths below the current level that the agent has mastered."""
+
+        return sorted(d for d in self._mastered_depths if d < self.curriculum_moves)
+
+
+    def _next_start_depth(self):
+
+        """Depth to generate this episode's start position at.
+
+        Usually the current level. On a `CURRICULUM_REHEARSAL_RATE` fraction of
+        resets it is a mastered shallower depth instead -- levels the ramp has
+        left are otherwise never seen again, and the network trains them away
+        (see the note in `game.config`).
+
+        Falls through to the current level when nothing has been mastered yet,
+        which is the case early in a run and at the starting depth.
+        """
+
+        if random.random() >= CURRICULUM_REHEARSAL_RATE:
+            return self.curriculum_moves
+
+        candidates = self.mastered_depths()
+        if not candidates:
+            return self.curriculum_moves
+
+        return random.choice(candidates)
+
+
     def reset(self):
 
         # Pick the target first so robots can be kept off it -- starting an episode
@@ -166,10 +237,13 @@ class RicochetRobotsEnv(gymnasium.Env):
         target = self.current_target
 
         if self.curriculum_moves > 0:
-            self.last_optimal_depth = self.curriculum.generate(target)
+            depth = self._next_start_depth()
+            self.last_was_rehearsal = depth != self.curriculum_moves
+            self.last_optimal_depth = self.curriculum.generate(target, depth)
         else:
             self.curriculum.random_once(target)
             self.last_optimal_depth = None
+            self.last_was_rehearsal = False
 
         self.visited_states.clear()
         self.move_counter = 0

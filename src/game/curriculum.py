@@ -57,8 +57,12 @@ class CurriculumGenerator:
     def curriculum_moves(self):
         return self.env.curriculum_moves
 
-    def generate(self, target):
-        """Start a position whose *measured* optimal depth is `curriculum_moves`.
+    def generate(self, target, depth=None):
+        """Start a position whose *measured* optimal depth is `depth`.
+
+        `depth` defaults to the current curriculum level. It is passed explicitly
+        only to rehearse a base case (see `env.reset`), which needs a shallow
+        position without moving the level the agent is being assessed at.
 
         Returns the depth actually produced, or None when it could not be
         measured. That number, not the requested one, is what the promotion gate
@@ -91,6 +95,9 @@ class CurriculumGenerator:
         random placement mixed in throughout for variety.
         """
 
+        if depth is None:
+            depth = self.curriculum_moves
+
         matching = [
             index for index, robot in enumerate(self.robots)
             if target.color.upper() == "ANY" or robot.color.lower() == target.color.lower()
@@ -102,12 +109,12 @@ class CurriculumGenerator:
             return None
 
         pool = self.depth_pool.setdefault(
-            self.curriculum_moves,
+            depth,
             collections.deque(maxlen=max(1, CURRICULUM_POOL_SIZE)),
         )
 
         if self._take_from_pool(pool):
-            return self.curriculum_moves
+            return depth
 
         best_positions, best_error, best_depth = None, None, None
 
@@ -116,7 +123,7 @@ class CurriculumGenerator:
         # afford them: verifying a depth-2 candidate costs single-digit
         # milliseconds against most of a second at depth 6.
         attempts = max(1, CURRICULUM_SCRAMBLE_ATTEMPTS)
-        if self.curriculum_moves <= 2:
+        if depth <= 2:
             attempts *= 4
 
         for attempt in range(attempts):
@@ -126,33 +133,33 @@ class CurriculumGenerator:
             # from all sharing a common ancestor in the solved state.
             if attempt % 2 == 1:
                 self.random_once(target)
-            elif self.curriculum_moves <= 2:
-                self.scramble_once(target, solver_index)
+            elif depth <= 2:
+                self.scramble_once(target, solver_index, depth)
             else:
-                self.forward_walk_once(target, solver_index)
+                self.forward_walk_once(target, solver_index, depth)
 
             # Only the verdict "is this position exactly `curriculum_moves`
             # deep?" is needed, so the search stops one level past it. Solving to
             # the true depth of a deep position costs seconds; this costs
             # milliseconds, and every episode pays it.
-            depth = self.env.measure_optimal_depth(max_depth=self.curriculum_moves + 1)
+            measured = self.env.measure_optimal_depth(max_depth=depth + 1)
 
             # Gave up rather than concluded. Accepting these would quietly
             # reinstate the original bug -- an unverified position counted as a
             # deep one -- so they are not eligible at all.
-            if depth == SEARCH_EXHAUSTED:
+            if measured == SEARCH_EXHAUSTED:
                 continue
 
             # Proven deeper than the bound. Recorded as one past the level rather
             # than as its unknown true depth: the promotion gate reads these as a
             # floor, so understating is the safe direction.
-            reached = self.curriculum_moves + 1 if depth is None else depth
+            reached = depth + 1 if measured is None else measured
 
             # Degenerate: a robot already sits on the goal, so there is no puzzle.
             if reached == 0:
                 continue
 
-            error = abs(reached - self.curriculum_moves)
+            error = abs(reached - depth)
             if best_error is None or error < best_error:
                 best_error, best_depth = error, reached
                 best_positions = [(r.x, r.y) for r in self.robots]
@@ -176,7 +183,7 @@ class CurriculumGenerator:
 
         # Only exact matches are worth keeping; a near miss would drift the
         # pool's difficulty away from the level it is filed under.
-        if best_depth == self.curriculum_moves:
+        if best_depth == depth:
             pool.append(((target.x, target.y, target.color), list(best_positions)))
 
         return best_depth
@@ -217,7 +224,7 @@ class CurriculumGenerator:
 
         self.env.place_robots_randomly(forbidden_extra={(target.x, target.y)})
 
-    def forward_walk_once(self, target, solver_index):
+    def forward_walk_once(self, target, solver_index, depth):
         """Start solved and play random legal moves until the position is messy.
 
         The walk length is scaled to the requested depth but deliberately much
@@ -243,7 +250,7 @@ class CurriculumGenerator:
         steps = min(
             CURRICULUM_WALK_MAX,
             max(CURRICULUM_WALK_MIN,
-                CURRICULUM_WALK_PER_DEPTH * self.curriculum_moves),
+                CURRICULUM_WALK_PER_DEPTH * depth),
         )
 
         for step in range(steps):
@@ -266,7 +273,7 @@ class CurriculumGenerator:
             robot.prev_x, robot.prev_y = robot.x, robot.y
             robot.robotLeftTarget = False
 
-    def scramble_once(self, target, solver_index):
+    def scramble_once(self, target, solver_index, depth):
         """Re-roll the robots and walk one fresh scramble backwards from solved.
 
         Re-rolling every attempt matters: repeating the scramble from the same
@@ -285,7 +292,7 @@ class CurriculumGenerator:
             robot.robotLeftTarget = False
 
         self.env.game.robot_manager.reverse_scramble(
-            self.curriculum_moves,
+            depth,
             required_first=solver_index,
             solver_index=solver_index,
             solver_bias=CURRICULUM_SOLVER_BIAS,

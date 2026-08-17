@@ -57,14 +57,27 @@ class Settings(BaseSettings):
         description="Directory training logs are written to",
     )
 
-    # Budget
-    TRAINING_EPISODES: int = Field(64_000, description="Number of self-play/training episodes")
+    # Budget. Sized off the 2026-08-13 `alphazero` run: the rolling 100-episode
+    # solve rate climbed from 18% to ~47% by episode 900 and then sat flat in a
+    # 26-49% band for the remaining 14k episodes, while training loss drifted from
+    # 0.40 up to 0.87. Learning was done inside the first hour; the other 27 hours
+    # bought nothing. A budget that outruns the plateau by an order of magnitude
+    # only spends GPU time re-fitting a buffer the policy has stopped improving on.
+    TRAINING_EPISODES: int = Field(2_000, description="Number of self-play/training episodes")
     NUM_ACTORS: int = Field(1, description="Number of parallel self-play actors")
-    TOTAL_MCTS_EPISODES: int = Field(50, description="Simulations per move")
+    
+    # 50 simulations is thin for a puzzle whose solutions run ~4 moves but whose
+    # failures ran the full 25-move cap: search that shallow rarely reaches the
+    # solutions the policy then has to learn from. Doubling it roughly doubles
+    # wall clock per episode, which the smaller episode budget pays for.
+    TOTAL_MCTS_EPISODES: int = Field(100, description="Simulations per move")
+    
     # Gradient steps taken per self-play episode. This used to be hard-coded to 1,
     # which meant a default 120-episode run performed 120 SGD steps in total while
-    # the LR schedule was written against a 500k-step run.
-    TRAIN_STEPS_PER_EPISODE: int = Field(40, description="Gradient steps per self-play episode")
+    # the LR schedule was written against a 500k-step run. 40 overcorrected: with
+    # the solve rate flat and the loss climbing, those extra steps were re-fitting
+    # stale buffer targets rather than tracking a policy that was still moving.
+    TRAIN_STEPS_PER_EPISODE: int = Field(10, description="Gradient steps per self-play episode")
 
     # Checkpointing. One weights file, overwritten only when the model improves:
     # saving every episode meant a run that peaked and then degraded ended with

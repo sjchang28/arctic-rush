@@ -32,7 +32,9 @@ class SharedStorage:
         # noisy window. Only meaningful alongside the weights it describes -- a
         # marker left behind by a deleted checkpoint would otherwise set a bar
         # that a freshly initialised network can never clear.
-        if os.path.exists(model_path):
+        self.resumed = os.path.exists(model_path)
+
+        if self.resumed:
             self.latest_network.load_model(path)
             self.best_level, self.best_score = self._read_best_marker()
         else:
@@ -128,30 +130,40 @@ class SharedStorage:
               overwrite a better checkpoint.
 
         Early episodes save unconditionally so that a crash in the first few
-        minutes still leaves a usable file.
+        minutes still leaves a usable file. That only applies to a fresh run: a
+        resumed one already has a usable file, and saving over it unconditionally
+        destroys the checkpoint the run was supposed to build on. The warmup
+        window also never touches the marker -- it is an insurance policy, not a
+        claim of merit, and a warmup save that rewrote the bar would strand the
+        run behind a score its early episodes happened to hit.
         """
 
         if not settings.SAVE_BEST_ONLY:
             self.latest_network.save_model()
             return True
 
-        warming_up = episode <= settings.CHECKPOINT_WARMUP_EPISODES
+        warming_up = (not self.resumed
+                      and episode <= settings.CHECKPOINT_WARMUP_EPISODES)
 
         # A new depth is a new scale; last level's rate is not a bar to clear.
         if level > self.best_level:
             self.best_level = level
             self.best_score = float("-inf")
 
-        improved = score > self.best_score
+        # Rates from different levels are not comparable. A resumed run restarts
+        # the curriculum at depth 1, where it solves ~100%; without the level
+        # guard that rate beats a hard-won depth-5 score and pins the bar at 100%
+        # of a depth the run is no longer playing, so nothing can ever save again.
+        improved = level == self.best_level and score > self.best_score
 
         if not (warming_up or improved):
             return False
 
+        self.latest_network.save_model()
+
         if improved:
             self.best_score = score
-
-        self.latest_network.save_model()
-        self._write_best_marker(episode)
+            self._write_best_marker(episode)
 
         if improved and not warming_up:
             logger.debug(

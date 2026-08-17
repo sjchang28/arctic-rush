@@ -137,10 +137,49 @@ DIRECTION2INT = {
 # Verification costs ~0.2 s per episode at depth 4 and ~1.3 s at depth 8,
 # against a ~1.5 s episode. CURRICULUM_POOL_REFRESH is the dial: lower it to
 # spend less time generating fresh positions, at the cost of variety.
+#
+# The gate is read once per window rather than after every episode. Read every
+# episode it is not measuring current competence at all -- it is asking whether
+# *any* trailing window has ever crossed the bar, re-rolled continuously, which
+# a marginal agent clears on variance alone. Measured on the runs to 2026-08-17:
+# every promotion past depth 3 fired at exactly the minimum passing count, never
+# with margin. At a true 70% solve rate the old gate promoted with probability
+# 0.281 per window; the current one, 0.007.
 CURRICULUM_START_MOVES = 1          # starting depth; 0 disables the curriculum
 CURRICULUM_MAX_MOVES = 15           # deepest level the ramp will reach
-CURRICULUM_PROMOTE_THRESHOLD = 0.75  # solved rate over the window that promotes
-CURRICULUM_PROMOTE_WINDOW = 30      # episodes the promotion decision reads
+CURRICULUM_PROMOTE_THRESHOLD = 0.85  # solved rate over the window that promotes
+CURRICULUM_PROMOTE_WINDOW = 40      # episodes the promotion decision reads
+
+# Promotion was one-way, so a level entered too early was permanent: the runs
+# above spent their remaining ~1400 episodes at 20-40% with no route back to the
+# depth they had actually earned. Demotion gives the ramp a way to correct
+# itself. The gap between the two thresholds is the hysteresis -- narrow it and
+# the level oscillates instead of settling.
+CURRICULUM_DEMOTE_THRESHOLD = 0.35  # solved rate over the window that steps back down
+
+# Positions are generated only at the current level, and the replay buffer holds
+# 100 games, so within 100 episodes of a promotion no example of the previous
+# level survives anywhere in the system -- the network is then trained off that
+# level for the rest of the run and forgets it. Since depth 5 is mostly "one good
+# move, then the depth-4 puzzle underneath", losing the shallow levels undermines
+# the deep ones too. A fraction of resets therefore replays a base case.
+#
+# Rehearsal episodes are practice, not assessment: they are excluded from the
+# solved rate the promotion gate reads. Counted, they would inflate the rate with
+# easy wins and drag the measured mean depth below CURRICULUM_MIN_DEPTH_RATIO --
+# promoting on the first and then deadlocking on the second.
+#
+# Which depths get rehearsed is earned rather than fixed. A depth joins the set
+# once its own rolling solved rate clears CURRICULUM_MASTERY_THRESHOLD, so at
+# depth 16 the agent is rehearsing everything it genuinely knows rather than
+# depth 1-2 forever. Membership is sticky: a mastered depth stays in the rotation
+# even if its rate later slips, because a depth dropped for slipping would never
+# be practised again and so could never recover -- which is the forgetting this
+# exists to prevent. CURRICULUM_MASTERY_WINDOW is how many attempts at a depth
+# are needed before its rate means anything.
+CURRICULUM_REHEARSAL_RATE = 0.25     # fraction of resets that replay a known depth
+CURRICULUM_MASTERY_THRESHOLD = 0.95  # solved rate at a depth that earns rehearsal
+CURRICULUM_MASTERY_WINDOW = 20       # attempts at a depth before its rate is judged
 
 # A backward move is not the inverse of a forward one in this game, and a
 # uniformly sampled scramble mostly shuffles robots that are not the one heading

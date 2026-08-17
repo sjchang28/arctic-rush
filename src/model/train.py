@@ -496,8 +496,19 @@ def muzero(config: RicochetRobotsConfig, render_ai: bool = False):
         reward_e = game.total_rewards()
 
         rewards.append(reward_e)
-        solved.append(1.0 if game.is_terminal() else 0.0)
-        depths.append(game.optimal_depth)
+
+        # Every episode counts towards its own depth's record, which is what
+        # decides the depth is worth rehearsing.
+        config.record_result(game.optimal_depth, game.is_terminal())
+
+        # Rehearsals are trained on like any other game but kept out of the
+        # curriculum statistics: they are practice at a level the agent has
+        # already left, so counting them would measure the wrong thing twice over
+        # -- inflating the solved rate with easy wins, and dragging the mean
+        # measured depth below the gate's own min-depth ratio.
+        if not game.was_rehearsal:
+            solved.append(1.0 if game.is_terminal() else 0.0)
+            depths.append(game.optimal_depth)
 
         # training. Hold off until the buffer has a few games, otherwise the
         # first batches are every position of a single trajectory.

@@ -22,7 +22,7 @@ class _FakeNetwork:
         self.saves += 1
 
 
-def _storage(tmp_path, monkeypatch, level=0, score=float("-inf")):
+def _storage(tmp_path, monkeypatch, level=0, score=float("-inf"), resumed=False):
     """A SharedStorage with the persistence wired up but no real network."""
 
     monkeypatch.setattr(settings, "MODEL_DIR", str(tmp_path))
@@ -34,6 +34,7 @@ def _storage(tmp_path, monkeypatch, level=0, score=float("-inf")):
     storage.latest_network = _FakeNetwork()
     storage.best_level = level
     storage.best_score = score
+    storage.resumed = resumed
     return storage
 
 
@@ -105,12 +106,48 @@ def test_marker_round_trips_so_a_resume_cannot_clobber(tmp_path, monkeypatch):
     with open(marker) as handle:
         assert json.load(handle)["score"] == pytest.approx(0.80)
 
-    resumed = _storage(tmp_path, monkeypatch)
+    resumed = _storage(tmp_path, monkeypatch, resumed=True)
     resumed.best_level, resumed.best_score = resumed._read_best_marker()
 
     assert resumed.best_level == 4
     assert not resumed.save_if_best(level=4, score=0.30, episode=51)
     assert resumed.latest_network.saves == 0
+
+
+def test_resumed_run_replaying_the_curriculum_cannot_clobber(tmp_path, monkeypatch):
+    """The failure that cost four runs of training.
+
+    A resumed run restarts the curriculum at depth 1, where it solves ~100%.
+    Warming up unconditionally overwrote the depth-5 weights it had just loaded,
+    and the easy rate was then recorded against the *inherited* level -- pinning
+    the bar at 100% of depth 5, which nothing could ever clear again.
+    """
+
+    storage = _storage(tmp_path, monkeypatch, level=5, score=0.55, resumed=True)
+
+    for episode in range(1, 4):
+        assert not storage.save_if_best(level=1, score=1.0, episode=episode)
+
+    assert storage.latest_network.saves == 0
+    assert storage.best_level == 5
+    assert storage.best_score == pytest.approx(0.55)
+
+    # Climbing back to the inherited depth is what re-opens saving.
+    assert storage.save_if_best(level=5, score=0.60, episode=900)
+
+
+def test_warmup_does_not_touch_the_marker(tmp_path, monkeypatch):
+    """Warmup is insurance against an early crash, not a claim of merit."""
+
+    storage = _storage(tmp_path, monkeypatch, level=1, score=0.90)
+    marker = os.path.join(str(tmp_path), "test", "best.json")
+
+    # Worse than the bar, but inside the warmup window: the file is written so a
+    # crash leaves something usable, and the bar is left alone.
+    assert storage.save_if_best(level=1, score=0.10, episode=1)
+    assert storage.latest_network.saves == 1
+    assert not os.path.exists(marker)
+    assert storage.best_score == pytest.approx(0.90)
 
 
 def test_missing_marker_is_not_an_unbeatable_bar(tmp_path, monkeypatch):

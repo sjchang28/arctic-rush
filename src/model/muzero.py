@@ -121,10 +121,24 @@ class MuZeroConfig:
     use_gumbel: bool = USE_GUMBEL
     gumbel_num_considered: int = GUMBEL_NUM_CONSIDERED
 
-    # Exponential learning rate schedule
+    # Exponential learning rate schedule: lr_init * lr_decay_rate ** (step /
+    # lr_decay_steps), applied in train.update_weights against the network's
+    # cumulative step count.
+    #
+    # lr_decay_steps was a hard 100k, which only made sense against the 500k-step
+    # run `training_steps` describes. It is really a function of the run budget,
+    # and the two silently desynced: at 40 gradient steps per episode the 2026-08-13
+    # run crossed 100k steps by episode 2,500 and 200k by episode 5,000, so its LR
+    # was ~5e-5 a fifth of the way in and ~1e-9 by the end. Its solve rate went
+    # flat at episode ~900 and never moved again for 14k episodes -- not a ceiling
+    # on the task, just a learning rate that had decayed to nothing.
+    #
+    # None derives it from the actual budget (see __post_init__) so a change to
+    # TRAINING_EPISODES or TRAIN_STEPS_PER_EPISODE carries the schedule with it.
+    # Pass a float to pin it explicitly.
     lr_init: float = 0.005
     lr_decay_rate: float = 0.1
-    lr_decay_steps: float = 100000
+    lr_decay_steps: Optional[float] = None
 
     # "muzero" searches the learned dynamics model; "alphazero" searches the
     # real simulator (see mcts.RealEnvironmentModel). Resolved in __post_init__
@@ -146,6 +160,13 @@ class MuZeroConfig:
             self.num_blocks = NUM_BLOCKS
         if self.value_support_size is None:
             self.value_support_size = VALUE_SUPPORT_SIZE
+
+        if self.lr_decay_steps is None:
+            # Spend the run on two decades of decay: the LR ends at 1% of
+            # lr_init rather than at either extreme -- decayed to nothing
+            # partway through, or barely annealed by the final episode.
+            total_steps = self.training_episodes * settings.TRAIN_STEPS_PER_EPISODE
+            self.lr_decay_steps = max(total_steps, 1) / 2
 
         if self.search_mode is None:
             self.search_mode = settings.SEARCH_MODE
@@ -234,6 +255,23 @@ class RicochetRobotsConfig(MuZeroConfig):
 
         if self.environment is not None:
             self.environment.env.set_curriculum_moves(moves)
+
+
+    def record_result(self, depth, solved: bool):
+
+        """Report an episode's outcome so the environment can track which depths
+        are mastered and therefore worth rehearsing."""
+
+        if self.environment is not None:
+            self.environment.env.record_result(depth, solved)
+
+
+    def mastered_depths(self):
+
+        if self.environment is None:
+            return []
+
+        return self.environment.env.mastered_depths()
 
 
     def finish_game(self):

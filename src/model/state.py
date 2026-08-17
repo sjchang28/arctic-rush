@@ -123,6 +123,14 @@ class RicochetRobotEnvironment:
         return self.env.last_optimal_depth
 
 
+    def was_rehearsal(self):
+
+        """Whether this episode is a base-case rehearsal rather than an attempt
+        at the current curriculum level."""
+
+        return self.env.last_was_rehearsal
+
+
     def render(self):
 
         if self.render_ai:
@@ -177,6 +185,10 @@ class RicochetRobotsGame:
         # How hard this episode actually was. `total_moves()` on its own says
         # nothing -- the gap between it and this is the score that matters.
         self.optimal_depth = self.environment.optimal_depth()
+
+        # Practice at a base case rather than an attempt at the current level.
+        # Trained on like any other game; excluded from the promotion statistics.
+        self.was_rehearsal = self.environment.was_rehearsal()
 
 
     def create_environment(self) -> RicochetRobotEnvironment:

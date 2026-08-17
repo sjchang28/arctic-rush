@@ -20,10 +20,12 @@ import numpy as np
 
 from src.core.logger import logger
 from src.game.config import (
+    CURRICULUM_DEMOTE_THRESHOLD,
     CURRICULUM_MAX_MOVES,
     CURRICULUM_MIN_DEPTH_RATIO,
     CURRICULUM_PROMOTE_THRESHOLD,
     CURRICULUM_PROMOTE_WINDOW,
+    CURRICULUM_START_MOVES,
     CURRICULUM_VERIFY_DEPTH,
 )
 
@@ -47,15 +49,27 @@ def maybe_promote_curriculum(config, solved, depths, episode) -> bool:
     too shallow refuses to promote and says so.
     """
 
-    if config.curriculum_moves <= 0 or config.curriculum_moves >= CURRICULUM_MAX_MOVES:
+    if config.curriculum_moves <= 0:
         return False
 
     window = CURRICULUM_PROMOTE_WINDOW
     if len(solved) < window:
         return False
 
+    # Decide on the window's own cadence. Read after every episode this is not
+    # measuring current competence -- it is asking whether *any* trailing window
+    # has ever crossed the bar, re-rolled continuously, which a marginal agent
+    # clears on variance alone. See the note in `game.config`.
+    if episode % window != 0:
+        return False
+
     recent = list(solved)[-window:]
-    if float(np.mean(recent)) < CURRICULUM_PROMOTE_THRESHOLD:
+    rate = float(np.mean(recent))
+
+    if rate < CURRICULUM_PROMOTE_THRESHOLD:
+        return maybe_demote_curriculum(config, solved, depths, episode, rate, window)
+
+    if config.curriculum_moves >= CURRICULUM_MAX_MOVES:
         return False
 
     measured = [d for d in list(depths)[-window:] if d is not None]
@@ -64,42 +78,72 @@ def maybe_promote_curriculum(config, solved, depths, episode) -> bool:
     # all there is. Deliberately permissive -- opting out is opting out.
     if CURRICULUM_VERIFY_DEPTH:
 
-        # Every episode in the window would repeat these, so report on the
-        # window's own cadence.
-        loud = episode % window == 0
-
         if len(measured) < window // 2:
-            if loud:
-                logger.warning(
-                    f"[Curriculum] Episode {episode}: only {len(measured)}/{window} recent "
-                    f"episodes had a verifiable optimal depth at level "
-                    f"{config.curriculum_moves}. Holding -- promoting here would be "
-                    f"promoting on unmeasured difficulty. Raise SOLVER_NODE_BUDGET to "
-                    f"push further."
-                )
+            logger.warning(
+                f"[Curriculum] Episode {episode}: only {len(measured)}/{window} recent "
+                f"episodes had a verifiable optimal depth at level "
+                f"{config.curriculum_moves}. Holding -- promoting here would be "
+                f"promoting on unmeasured difficulty. Raise SOLVER_NODE_BUDGET to "
+                f"push further."
+            )
             return False
 
         mean_depth = float(np.mean(measured))
         required = CURRICULUM_MIN_DEPTH_RATIO * config.curriculum_moves
         if mean_depth < required:
-            if loud:
-                logger.warning(
-                    f"[Curriculum] Episode {episode}: solved {np.mean(recent):.0%} but the "
-                    f"generated positions average only {mean_depth:.1f} optimal moves at "
-                    f"depth {config.curriculum_moves} (need {required:.1f}). Holding -- the "
-                    f"solved rate is measuring easier puzzles than the level claims."
-                )
+            logger.warning(
+                f"[Curriculum] Episode {episode}: solved {rate:.0%} but the "
+                f"generated positions average only {mean_depth:.1f} optimal moves at "
+                f"depth {config.curriculum_moves} (need {required:.1f}). Holding -- the "
+                f"solved rate is measuring easier puzzles than the level claims."
+            )
             return False
 
     config.set_curriculum_moves(config.curriculum_moves + 1)
 
     depth_note = f", mean optimal depth {np.mean(measured):.1f}" if measured else ""
     logger.info(
-        f"[Curriculum] Episode {episode}: solved {np.mean(recent):.0%} of the last "
+        f"[Curriculum] Episode {episode}: solved {rate:.0%} of the last "
         f"{window}{depth_note} -- promoting to depth {config.curriculum_moves}."
     )
 
     # Start the next window fresh; the old history describes the easier level.
+    solved.clear()
+    depths.clear()
+    return True
+
+
+def maybe_demote_curriculum(config, solved, depths, episode, rate, window) -> bool:
+    """Step back down when the current level is clearly beyond the agent.
+
+    Promotion used to be one-way, which made an early promotion permanent: the
+    runs to 2026-08-17 all promoted to depth 5 on a marginal window, collapsed to
+    20-40%, and then spent their remaining ~1400 episodes there with no route
+    back to the depth they had actually earned. Worse, the level they had earned
+    stopped being generated at all, so it was trained away while they failed.
+
+    Demotion is not the mirror of promotion. The bar is far lower than
+    `CURRICULUM_PROMOTE_THRESHOLD`, and the gap between the two is deliberate:
+    with thresholds close together a level that sits between them would promote,
+    fail, demote, and promote again indefinitely, and the agent would spend the
+    run oscillating rather than learning either level.
+    """
+
+    if rate >= CURRICULUM_DEMOTE_THRESHOLD:
+        return False
+
+    # Nothing below the starting depth to fall back to.
+    if config.curriculum_moves <= CURRICULUM_START_MOVES:
+        return False
+
+    config.set_curriculum_moves(config.curriculum_moves - 1)
+
+    logger.warning(
+        f"[Curriculum] Episode {episode}: solved only {rate:.0%} of the last {window} "
+        f"-- demoting to depth {config.curriculum_moves}."
+    )
+
+    # The old history describes the harder level the agent has just left.
     solved.clear()
     depths.clear()
     return True
